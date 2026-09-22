@@ -1,59 +1,26 @@
-:root {
-  color: #f4f7fb;
-  background: #1b1f27;
-  font: 12px/1.4 "Segoe UI", sans-serif;
+.sdpi-item textarea.sdpi-item-value {
+  height: auto;
+  min-height: 72px;
 }
 
-* { box-sizing: border-box; }
-
-body { margin: 0; }
-
-button, input, select, textarea {
-  font: inherit;
-  color: inherit;
-  background: #12151c;
-  border: 1px solid #3a4254;
-  border-radius: 6px;
-  padding: 4px 6px;
-}
-
-button { cursor: pointer; }
-button:hover { border-color: #6d7890; }
-
-.app { display: flex; flex-direction: column; gap: 10px; padding: 10px; }
-.panel {
-  background: #242a36;
-  border-radius: 10px;
-  padding: 10px;
+.targets .sdpi-item-child {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  width: 100%;
 }
-.panel h2 {
-  margin: 0;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #b7c0d0;
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin: 0 6px 0 2px;
+  vertical-align: middle;
 }
-.row { display: flex; gap: 6px; align-items: center; }
-.row > * { min-width: 0; }
-.grow { flex: 1; }
-.stack { display: flex; flex-direction: column; gap: 4px; }
-.instance {
-  display: grid;
-  grid-template-columns: 14px 1fr auto;
-  gap: 6px;
-  align-items: start;
-  padding: 6px;
-  background: #1b1f27;
-  border-radius: 8px;
+
+.caution {
+  color: #e2b15a;
+  font-size: 9pt;
+  line-height: 1.4;
+  margin: 0 16px 8px 103px;
 }
-.dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; }
-.fields { display: grid; grid-template-columns: 72px 1fr; gap: 4px 6px; align-items: center; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.chip { border-radius: 999px; padding: 3px 8px; }
-.chip.on { background: #315ea8; border-color: #315ea8; }
-.warn { color: #e2b15a; font-size: 11px; }
-.muted { color: #8d97a8; }
-.color { width: 36px; padding: 0; height: 26px; }

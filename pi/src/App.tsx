@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useGlobalSettings,
   usePluginMessage,
@@ -6,6 +6,7 @@ import {
   useSettings,
   useStreamDeck
 } from "@mikanseilaboratory/streamdeck-pi-client";
+import type { LiveInstance, ObsConfigBridge } from "./bridge";
 import type {
   ActionParams,
   ActionSettings,
@@ -14,8 +15,6 @@ import type {
   TargetGroup,
   TargetSelector
 } from "./generated/contracts";
-
-const PALETTE = ["#4c8dff", "#ef5b5b", "#3cba7a", "#e2b15a", "#b07cff", "#4ec8d4", "#f08bbd", "#9aa4b5"];
 
 const emptyParams = (): ActionParams => ({
   sceneName: "",
@@ -56,8 +55,6 @@ const globalDefaults: GlobalSettings = {
   fgColor: "#f4f7fb"
 };
 
-type Status = { kind: string; message?: string; obsVersion?: string };
-type InstanceStatus = InstanceConfig & { status?: Status };
 type CatalogItem = { name: string; presentOn: string[]; missingOn: string[] };
 
 const KIND_FIELDS: Record<string, Array<keyof ActionParams>> = {
@@ -94,19 +91,57 @@ const CATALOG: Record<string, string> = {
   volume: "inputs"
 };
 
+const CONFIG_WINDOW = "obs-websocket-config";
+
 export function App() {
   const deck = useStreamDeck();
   const kind = deck.actionInfo?.action.split(".").at(-1) ?? "stream";
   const global = useGlobalSettings<GlobalSettings>(globalDefaults);
   const action = useSettings<ActionSettings>(actionDefaults);
   const send = useSendToPlugin();
-  const [statuses, setStatuses] = useState<InstanceStatus[]>([]);
+  const [statuses, setStatuses] = useState<LiveInstance[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
+  const settingsRef = useRef(global.settings);
+  const statusRef = useRef(statuses);
+  const listenersRef = useRef(new Set<(instances: LiveInstance[]) => void>());
+  const configWindowRef = useRef<Window | null>(null);
+  const sendRef = useRef(send);
+  settingsRef.current = global.settings;
+  statusRef.current = statuses;
+  sendRef.current = send;
 
-  usePluginMessage((payload: { type?: string; instances?: InstanceStatus[]; items?: CatalogItem[] }) => {
+  usePluginMessage((payload: { type?: string; instances?: LiveInstance[]; items?: CatalogItem[] }) => {
     if (payload.type === "status" && payload.instances) setStatuses(payload.instances);
     if (payload.type === "catalog" && payload.items) setCatalog(payload.items);
   });
+
+  useEffect(() => {
+    const bridge: ObsConfigBridge = {
+      getSettings: () => settingsRef.current,
+      setSettings: (next) => global.setSettings(next),
+      reconnect: (id) => {
+        const ids = id ? [id] : settingsRef.current.instances.map((instance) => instance.id);
+        for (const item of ids) sendRef.current({ type: "reconnect", id: item });
+      },
+      subscribe: (listener) => {
+        listenersRef.current.add(listener);
+        listener(statusRef.current);
+        return () => listenersRef.current.delete(listener);
+      }
+    };
+    window.obsConfig = bridge;
+    return () => {
+      if (window.obsConfig === bridge) delete window.obsConfig;
+    };
+  }, [global.setSettings]);
+
+  useEffect(() => {
+    for (const listener of listenersRef.current) listener(statuses);
+    const child = configWindowRef.current;
+    if (child && !child.closed && child.opener === window) {
+      child.refreshObsConfig?.(settingsRef.current, statuses);
+    }
+  }, [statuses, global.settings]);
 
   useEffect(() => {
     send({ type: "ready" });
@@ -116,216 +151,94 @@ export function App() {
 
   const fields = KIND_FIELDS[kind] ?? [];
   const instances = global.settings.instances ?? [];
+  const groups = global.settings.groups ?? [];
+  const target = action.settings.common?.target ?? { kind: "all" };
+
+  const openConfig = () => {
+    const features = "width=760,height=840";
+    const existing = window.open("", CONFIG_WINDOW);
+    if (!existing) return;
+    let owned = false;
+    try {
+      owned = existing.opener === window;
+    } catch {
+      owned = false;
+    }
+    if (!owned) {
+      existing.close();
+      configWindowRef.current = window.open("./configuration.html", CONFIG_WINDOW, features);
+      return;
+    }
+    const href = existing.location.href;
+    if (href.includes("configuration.html")) {
+      existing.focus();
+      existing.refreshObsConfig?.(settingsRef.current, statusRef.current);
+      configWindowRef.current = existing;
+      return;
+    }
+    existing.location.href = new URL("./configuration.html", window.location.href).href;
+    configWindowRef.current = existing;
+  };
 
   return (
-    <div className="app">
-      <Connections
-        settings={global.settings}
-        setSettings={global.setSettings}
+    <div className="sdpi-wrapper">
+      <div className="sdpi-heading">Target</div>
+      <TargetPicker
+        instances={instances}
+        groups={groups}
         statuses={statuses}
-        reconnect={(id) => send({ type: "reconnect", id })}
+        value={target}
+        onChange={(next) =>
+          action.setSettings((previous) => ({
+            ...previous,
+            common: { ...previous.common, target: next }
+          }))
+        }
       />
-      <section className="panel">
-        <h2>Target</h2>
-        <TargetPicker
-          instances={instances}
-          groups={global.settings.groups ?? []}
-          value={action.settings.common?.target ?? { kind: "all" }}
-          onChange={(target) =>
+      {fields.length > 0 && (
+        <CheckRow
+          label="Parameters"
+          checked={action.settings.common?.sharedParams !== false}
+          text="Same values for every target"
+          onChange={(checked) =>
             action.setSettings((previous) => ({
               ...previous,
-              common: { ...previous.common, target }
+              common: { ...previous.common, sharedParams: checked }
             }))
           }
         />
-        {fields.length > 0 && (
-          <label className="row">
-            <input
-              type="checkbox"
-              checked={action.settings.common?.sharedParams !== false}
-              onChange={(event) =>
-                action.setSettings((previous) => ({
-                  ...previous,
-                  common: { ...previous.common, sharedParams: event.target.checked }
-                }))
-              }
-            />
-            Use the same parameters for every target
-          </label>
-        )}
-        <label className="row">
-          <input
-            type="checkbox"
-            checked={!!action.settings.advanced?.longPress}
-            onChange={(event) =>
-              action.setSettings((previous) => ({
-                ...previous,
-                advanced: { ...previous.advanced, longPress: event.target.checked }
-              }))
-            }
-          />
-          Long press uses the alternate action
-        </label>
-      </section>
+      )}
+      <CheckRow
+        label="Long press"
+        checked={!!action.settings.advanced?.longPress}
+        text="Use the alternate action"
+        onChange={(checked) =>
+          action.setSettings((previous) => ({
+            ...previous,
+            advanced: { ...previous.advanced, longPress: checked }
+          }))
+        }
+      />
       {fields.length > 0 && (
         <Params
           kind={kind}
           fields={fields}
           shared={action.settings.common?.sharedParams !== false}
           instances={instances}
+          target={target}
+          groups={groups}
           settings={action.settings}
           setSettings={action.setSettings}
           catalog={catalog}
         />
       )}
-    </div>
-  );
-}
-
-function Connections({
-  settings,
-  setSettings,
-  statuses,
-  reconnect
-}: {
-  settings: GlobalSettings;
-  setSettings: (next: GlobalSettings | ((previous: GlobalSettings) => GlobalSettings)) => void;
-  statuses: InstanceStatus[];
-  reconnect: (id: string) => void;
-}) {
-  const instances = settings.instances ?? [];
-  const statusOf = (id: string) => statuses.find((item) => item.id === id)?.status;
-
-  const update = (next: InstanceConfig[]) => setSettings((previous) => ({ ...previous, instances: next }));
-
-  return (
-    <section className="panel">
-      <h2>OBS instances</h2>
-      {instances.map((instance, index) => {
-        const status = statusOf(instance.id);
-        return (
-          <div
-            className="instance"
-            key={instance.id}
-            draggable
-            onDragStart={(event) => event.dataTransfer.setData("text/plain", String(index))}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              const from = Number(event.dataTransfer.getData("text/plain"));
-              if (Number.isNaN(from) || from === index) return;
-              const next = instances.slice();
-              const [moved] = next.splice(from, 1);
-              next.splice(index, 0, moved);
-              update(next);
-            }}
-          >
-            <span className="dot" style={{ background: dotColor(status) }} title={status?.kind ?? "unknown"} />
-            <div className="fields">
-              <span>Name</span>
-              <input value={instance.name} onChange={(event) => patchInstance(instances, index, { name: event.target.value }, update)} />
-              <span>Host</span>
-              <input value={instance.host} onChange={(event) => patchInstance(instances, index, { host: event.target.value }, update)} />
-              <span>Port</span>
-              <input type="number" value={instance.port} onChange={(event) => patchInstance(instances, index, { port: Number(event.target.value) }, update)} />
-              <span>Password</span>
-              <input type="password" value={instance.password} onChange={(event) => patchInstance(instances, index, { password: event.target.value }, update)} />
-            </div>
-            <div className="stack">
-              <input className="color" type="color" value={instance.color} onChange={(event) => patchInstance(instances, index, { color: event.target.value }, update)} />
-              <button onClick={() => reconnect(instance.id)}>Reconnect</button>
-              <button onClick={() => update(instances.filter((_, item) => item !== index))}>Remove</button>
-            </div>
-          </div>
-        );
-      })}
-      <button
-        onClick={() =>
-          update([
-            ...instances,
-            {
-              id: crypto.randomUUID(),
-              name: `OBS ${instances.length + 1}`,
-              host: "127.0.0.1",
-              port: 4455 + instances.length,
-              password: "",
-              color: PALETTE[instances.length % PALETTE.length],
-              enabled: true
-            }
-          ])
-        }
-      >
-        Add OBS
-      </button>
-      <Groups
-        instances={instances}
-        groups={settings.groups ?? []}
-        setGroups={(groups) => setSettings((previous) => ({ ...previous, groups }))}
-      />
-      <label className="row">
-        Long press
-        <input
-          type="number"
-          value={settings.longPressMs}
-          onChange={(event) => setSettings((previous) => ({ ...previous, longPressMs: Number(event.target.value) }))}
-        />
-        ms
-      </label>
-    </section>
-  );
-}
-
-function Groups({
-  instances,
-  groups,
-  setGroups
-}: {
-  instances: InstanceConfig[];
-  groups: TargetGroup[];
-  setGroups: (groups: TargetGroup[]) => void;
-}) {
-  return (
-    <div className="stack">
-      <strong>Groups</strong>
-      {groups.map((group, index) => (
-        <div className="stack" key={group.id}>
-          <div className="row">
-            <input
-              className="grow"
-              value={group.name}
-              onChange={(event) => {
-                const next = groups.slice();
-                next[index] = { ...group, name: event.target.value };
-                setGroups(next);
-              }}
-            />
-            <button onClick={() => setGroups(groups.filter((_, item) => item !== index))}>Remove</button>
-          </div>
-          <div className="chips">
-            {instances.map((instance) => {
-              const on = group.members.includes(instance.id);
-              return (
-                <button
-                  key={instance.id}
-                  className={on ? "chip on" : "chip"}
-                  onClick={() => {
-                    const members = on ? group.members.filter((id) => id !== instance.id) : [...group.members, instance.id];
-                    const next = groups.slice();
-                    next[index] = { ...group, members };
-                    setGroups(next);
-                  }}
-                >
-                  {instance.name}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ))}
-      <button
-        onClick={() => setGroups([...groups, { id: crypto.randomUUID(), name: `Group ${groups.length + 1}`, members: [] }])}
-      >
-        Add group
-      </button>
+      <div className="sdpi-heading">Connections</div>
+      <div className="sdpi-item">
+        <div className="sdpi-item-label">OBS</div>
+        <button className="sdpi-item-value" type="button" onClick={openConfig}>
+          Manage instances
+        </button>
+      </div>
     </div>
   );
 }
@@ -333,49 +246,105 @@ function Groups({
 function TargetPicker({
   instances,
   groups,
+  statuses,
   value,
   onChange
 }: {
   instances: InstanceConfig[];
   groups: TargetGroup[];
+  statuses: LiveInstance[];
   value: TargetSelector;
   onChange: (value: TargetSelector) => void;
 }) {
+  const [preferMultiple, setPreferMultiple] = useState(value.kind === "instances" && value.ids.length !== 1);
+  useEffect(() => {
+    if (value.kind !== "instances") setPreferMultiple(false);
+  }, [value]);
+  const mode = preferMultiple ? "multiple" : targetMode(value);
   const selected = value.kind === "instances" ? value.ids : [];
   return (
-    <div className="stack">
-      <div className="chips">
-        <button className={value.kind === "all" ? "chip on" : "chip"} onClick={() => onChange({ kind: "all" })}>
-          All enabled
-        </button>
-        {groups.map((group) => (
-          <button
-            key={group.id}
-            className={value.kind === "group" && value.id === group.id ? "chip on" : "chip"}
-            onClick={() => onChange({ kind: "group", id: group.id })}
-          >
-            {group.name}
-          </button>
-        ))}
+    <>
+      <div type="select" className="sdpi-item">
+        <div className="sdpi-item-label">Send to</div>
+        <select
+          className="sdpi-item-value select"
+          value={mode}
+          onChange={(event) => {
+            const next = event.target.value;
+            setPreferMultiple(next === "multiple");
+            onChange(selectorFromMode(next, selected));
+          }}
+        >
+          <option value="all">All enabled</option>
+          {groups.map((group) => (
+            <option key={group.id} value={`group:${group.id}`}>
+              Group: {group.name || "Untitled"}
+            </option>
+          ))}
+          {instances.map((instance) => (
+            <option key={instance.id} value={`instance:${instance.id}`}>
+              {instance.name || "OBS"}
+              {instance.enabled ? "" : " (disabled)"}
+            </option>
+          ))}
+          <option value="multiple">Multiple instances</option>
+        </select>
       </div>
-      <div className="chips">
-        {instances.map((instance) => {
-          const on = value.kind === "instances" && selected.includes(instance.id);
-          return (
-            <button
-              key={instance.id}
-              className={on ? "chip on" : "chip"}
-              style={{ borderColor: instance.color }}
-              onClick={() => {
-                const ids = on ? selected.filter((id) => id !== instance.id) : [...selected, instance.id];
-                onChange(ids.length === 0 ? { kind: "all" } : { kind: "instances", ids });
-              }}
-            >
-              {instance.name}
-            </button>
-          );
-        })}
-      </div>
+      {mode === "multiple" && (
+        <div type="checkbox" className="sdpi-item targets">
+          <div className="sdpi-item-label">Instances</div>
+          <div className="sdpi-item-value">
+            {instances.length === 0 && <span>No instances yet</span>}
+            {instances.map((instance) => {
+              const id = `target-${instance.id}`;
+              const on = selected.includes(instance.id);
+              const status = statuses.find((item) => item.id === instance.id)?.status?.kind;
+              return (
+                <div className="sdpi-item-child" key={instance.id}>
+                  <input
+                    id={id}
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => {
+                      const ids = on ? selected.filter((item) => item !== instance.id) : [...selected, instance.id];
+                      onChange({ kind: "instances", ids });
+                    }}
+                  />
+                  <label htmlFor={id}>
+                    <span></span>
+                    <i className={`swatch status-dot ${status ?? ""}`} style={{ background: statusColor(status, instance.color) }} />
+                    {instance.name || "OBS"}
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function CheckRow({
+  label,
+  checked,
+  text,
+  onChange
+}: {
+  label: string;
+  checked: boolean;
+  text: string;
+  onChange: (checked: boolean) => void;
+}) {
+  const id = `check-${label.replace(/\s+/g, "-").toLowerCase()}`;
+  return (
+    <div type="checkbox" className="sdpi-item">
+      <div className="sdpi-item-label">{label}</div>
+      <input id={id} className="sdpi-item-value" type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <label htmlFor={id}>
+        <span></span>
+        {text}
+      </label>
     </div>
   );
 }
@@ -385,6 +354,8 @@ function Params({
   fields,
   shared,
   instances,
+  target,
+  groups,
   settings,
   setSettings,
   catalog
@@ -393,15 +364,24 @@ function Params({
   fields: Array<keyof ActionParams>;
   shared: boolean;
   instances: InstanceConfig[];
+  target: TargetSelector;
+  groups: TargetGroup[];
   settings: ActionSettings;
   setSettings: (next: ActionSettings | ((previous: ActionSettings) => ActionSettings)) => void;
   catalog: CatalogItem[];
 }) {
-  const editors = shared ? [{ id: "shared", name: "Shared", params: settings.shared ?? emptyParams() }] : instances.map((instance) => ({
-    id: instance.id,
-    name: instance.name,
-    params: settings.params?.[instance.id] ?? settings.shared ?? emptyParams()
-  }));
+  const targeted = useMemo(() => instancesForTarget(instances, groups, target), [instances, groups, target]);
+  const [selectedId, setSelectedId] = useState(targeted[0]?.id ?? "");
+  const activeId = targeted.some((instance) => instance.id === selectedId) ? selectedId : targeted[0]?.id ?? "";
+  const editors = shared
+    ? [{ id: "shared", name: "Shared", params: settings.shared ?? emptyParams() }]
+    : targeted
+        .filter((instance) => instance.id === activeId)
+        .map((instance) => ({
+          id: instance.id,
+          name: instance.name,
+          params: settings.params?.[instance.id] ?? settings.shared ?? emptyParams()
+        }));
 
   const write = (id: string, params: ActionParams) => {
     setSettings((previous) => {
@@ -411,26 +391,37 @@ function Params({
   };
 
   const suggestions = useMemo(() => catalog.map((item) => item.name), [catalog]);
+  const partial = catalog.filter((item) => item.missingOn.length > 0);
 
   return (
-    <section className="panel">
-      <h2>Parameters</h2>
-      {editors.map((editor) => (
-        <div key={editor.id} className="stack">
-          {!shared && <strong>{editor.name}</strong>}
-          <ParamFields kind={kind} fields={fields} params={editor.params} suggestions={suggestions} onChange={(params) => write(editor.id, params)} />
+    <>
+      <div className="sdpi-heading">Action</div>
+      {!shared && (
+        <div type="select" className="sdpi-item">
+          <div className="sdpi-item-label">Instance</div>
+          <select className="sdpi-item-value select" value={activeId} onChange={(event) => setSelectedId(event.target.value)}>
+            {targeted.map((instance) => (
+              <option key={instance.id} value={instance.id}>
+                {instance.name || "OBS"}
+              </option>
+            ))}
+          </select>
         </div>
-      ))}
-      {catalog.some((item) => item.missingOn.length > 0) && (
-        <p className="warn">
-          Some names exist on only part of the selection:{" "}
-          {catalog
-            .filter((item) => item.missingOn.length > 0)
-            .map((item) => item.name)
-            .join(", ")}
-        </p>
       )}
-    </section>
+      {editors.map((editor) => (
+        <ParamFields
+          key={editor.id}
+          kind={kind}
+          fields={fields}
+          params={editor.params}
+          suggestions={suggestions}
+          onChange={(params) => write(editor.id, params)}
+        />
+      ))}
+      {partial.length > 0 && (
+        <p className="caution">Some names exist on only part of the selection: {partial.map((item) => item.name).join(", ")}</p>
+      )}
+    </>
   );
 }
 
@@ -449,7 +440,7 @@ function ParamFields({
 }) {
   const listId = `suggestions-${kind}`;
   return (
-    <div className="fields">
+    <>
       <datalist id={listId}>
         {suggestions.map((name) => (
           <option key={name} value={name} />
@@ -458,7 +449,7 @@ function ParamFields({
       {fields.map((field) => (
         <Field key={field} field={field} params={params} listId={listId} onChange={onChange} />
       ))}
-    </div>
+    </>
   );
 }
 
@@ -475,61 +466,96 @@ function Field({
 }) {
   const value = params[field];
   if (typeof value === "boolean") {
+    const id = `field-${field}`;
     return (
-      <>
-        <span>{label(field)}</span>
-        <input type="checkbox" checked={value} onChange={(event) => onChange({ ...params, [field]: event.target.checked })} />
-      </>
+      <div type="checkbox" className="sdpi-item">
+        <div className="sdpi-item-label">{label(field)}</div>
+        <input
+          id={id}
+          className="sdpi-item-value"
+          type="checkbox"
+          checked={value}
+          onChange={(event) => onChange({ ...params, [field]: event.target.checked })}
+        />
+        <label htmlFor={id}>
+          <span></span>
+          {label(field)}
+        </label>
+      </div>
     );
   }
-  if (field === "mediaAction" || field === "stat") {
-    const options = field === "stat" ? ["fps", "cpu", "memory", "dropped"] : ["toggle", "play", "pause", "stop", "restart", "next", "previous"];
+  if (field === "mediaAction" || field === "stat" || field === "format") {
+    const options =
+      field === "stat"
+        ? ["fps", "cpu", "memory", "dropped"]
+        : field === "format"
+          ? ["png", "jpg", "webp"]
+          : ["toggle", "play", "pause", "stop", "restart", "next", "previous"];
     return (
-      <>
-        <span>{label(field)}</span>
-        <select value={String(value)} onChange={(event) => onChange({ ...params, [field]: event.target.value })}>
+      <div type="select" className="sdpi-item">
+        <div className="sdpi-item-label">{label(field)}</div>
+        <select className="sdpi-item-value select" value={String(value)} onChange={(event) => onChange({ ...params, [field]: event.target.value })}>
           {options.map((option) => (
-            <option key={option}>{option}</option>
+            <option key={option} value={option}>
+              {option}
+            </option>
           ))}
         </select>
-      </>
+      </div>
     );
   }
   const numeric = field === "stepDb";
   const wide = field === "requestData" || field === "batchRequests";
   return (
-    <>
-      <span>{label(field)}</span>
+    <div className="sdpi-item">
+      <div className="sdpi-item-label">{label(field)}</div>
       {wide ? (
-        <textarea rows={4} value={String(value)} onChange={(event) => onChange({ ...params, [field]: event.target.value })} />
+        <textarea
+          className="sdpi-item-value"
+          rows={4}
+          value={String(value)}
+          onChange={(event) => onChange({ ...params, [field]: event.target.value })}
+        />
       ) : (
         <input
+          className="sdpi-item-value"
           type={numeric ? "number" : "text"}
           list={numeric ? undefined : listId}
           value={String(value)}
           step={numeric ? "0.5" : undefined}
-          onChange={(event) =>
-            onChange({ ...params, [field]: numeric ? Number(event.target.value) : event.target.value })
-          }
+          onChange={(event) => onChange({ ...params, [field]: numeric ? Number(event.target.value) : event.target.value })}
         />
       )}
-    </>
+    </div>
   );
 }
 
-function patchInstance(
-  instances: InstanceConfig[],
-  index: number,
-  patch: Partial<InstanceConfig>,
-  update: (next: InstanceConfig[]) => void
-) {
-  const next = instances.slice();
-  next[index] = { ...instances[index], ...patch };
-  update(next);
+function targetMode(value: TargetSelector) {
+  if (value.kind === "all") return "all";
+  if (value.kind === "group") return `group:${value.id}`;
+  if (value.ids.length === 1) return `instance:${value.ids[0]}`;
+  return "multiple";
 }
 
-function dotColor(status: Status | undefined) {
-  switch (status?.kind) {
+function selectorFromMode(mode: string, selected: string[]): TargetSelector {
+  if (mode === "all") return { kind: "all" };
+  if (mode === "multiple") return { kind: "instances", ids: selected };
+  if (mode.startsWith("group:")) return { kind: "group", id: mode.slice("group:".length) };
+  if (mode.startsWith("instance:")) return { kind: "instances", ids: [mode.slice("instance:".length)] };
+  return { kind: "all" };
+}
+
+function instancesForTarget(instances: InstanceConfig[], groups: TargetGroup[], target: TargetSelector) {
+  if (target.kind === "group") {
+    const group = groups.find((item) => item.id === target.id);
+    return instances.filter((instance) => group?.members.includes(instance.id));
+  }
+  if (target.kind === "instances") return instances.filter((instance) => target.ids.includes(instance.id));
+  return instances.filter((instance) => instance.enabled);
+}
+
+function statusColor(kind: string | undefined, fallback: string) {
+  switch (kind) {
     case "connected":
       return "#3cba7a";
     case "connecting":
@@ -538,11 +564,31 @@ function dotColor(status: Status | undefined) {
       return "#ef5b5b";
     case "disabled":
       return "#6d7890";
-    default:
+    case "unreachable":
       return "#8a4a3a";
+    default:
+      return fallback;
   }
 }
 
 function label(field: keyof ActionParams) {
-  return field.replace(/[A-Z]/g, (char) => ` ${char.toLowerCase()}`);
+  const names: Partial<Record<keyof ActionParams, string>> = {
+    sceneName: "Scene",
+    sourceName: "Source",
+    inputName: "Input",
+    filterName: "Filter",
+    collectionName: "Collection",
+    profileName: "Profile",
+    filePath: "File",
+    hotkeyName: "Hotkey",
+    keyId: "Key",
+    chapterName: "Chapter",
+    mediaAction: "Action",
+    stepDb: "Step (dB)",
+    requestType: "Request",
+    requestData: "Data",
+    batchRequests: "Batch",
+    haltOnFailure: "Halt"
+  };
+  return names[field] ?? field;
 }
