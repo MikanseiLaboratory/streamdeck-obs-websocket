@@ -4,7 +4,7 @@
 
 ## 必要環境
 
-- Stream Deck 6.5 以降
+- Stream Deck 6.4 以降
 - OBS Studio 30.2 以降 (obs-websocket 5.5。OBS に同梱されています)
 - 各 OBS の WebSocket サーバを有効にし、ポートが重ならないようにする
 
@@ -15,7 +15,7 @@ cargo test --workspace
 ./publish.sh
 ```
 
-macOS では arm64 と x64 をユニバーサルバイナリにまとめ、`bin/osx/` に置きます。Windows 用は `publish.ps1` です。生成物は `dev.flowingspdg.multiobs.rust.sdPlugin` です。
+macOS では arm64 と x64 をユニバーサルバイナリ `bin/plugin` にまとめます。Windows 用は `bin/plugin.exe` で、`publish.ps1` が生成します。プラグイン本体は `plugin/dev.mikanseilaboratory.obs.websocket.sdPlugin` です。
 
 `INSTALL=1 ./publish.sh` は macOS の Stream Deck プラグインフォルダへコピーします。
 

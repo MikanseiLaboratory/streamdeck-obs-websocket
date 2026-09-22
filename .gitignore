@@ -2,7 +2,7 @@
 **/node_modules
 crates/multiobs-plugin/bindings
 **/*.sdPlugin/bin
-**/*.sdPlugin/ui
+**/*.sdPlugin/propertyinspector
 .DS_Store
 *.streamDeckPlugin
 artifacts

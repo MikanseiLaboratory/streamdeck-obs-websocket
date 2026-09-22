@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   base: "./",
   build: {
-    outDir: "../dev.flowingspdg.multiobs.rust.sdPlugin/ui",
+    outDir: "../plugin/dev.mikanseilaboratory.obs.websocket.sdPlugin/propertyinspector",
     emptyOutDir: true
   }
 });

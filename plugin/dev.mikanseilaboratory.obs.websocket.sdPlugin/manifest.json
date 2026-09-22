@@ -1,0 +1,408 @@
+{
+  "UUID": "dev.mikanseilaboratory.obs.websocket",
+  "Name": "OBS Websocket [MikanseiLaboratory]",
+  "Author": "未完成成果物研究所",
+  "Description": "Control any number of OBS Studio instances from Stream Deck.",
+  "Version": "0.1.0.0",
+  "Icon": "images/icon",
+  "Category": "OBS Websocket [MikanseiLaboratory]",
+  "CategoryIcon": "images/icon",
+  "CodePath": "bin/plugin",
+  "CodePathWin": "bin/plugin.exe",
+  "CodePathMac": "bin/plugin",
+  "PropertyInspectorPath": "propertyinspector/index.html",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.4"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    },
+    {
+      "Platform": "mac",
+      "MinimumVersion": "10.15"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.stream",
+      "Name": "Stream",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle streaming. Long press stops.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.record",
+      "Name": "Record",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle recording. Long press stops.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.recordpause",
+      "Name": "Record Pause",
+      "Icon": "images/icon",
+      "Tooltip": "Pause or resume recording.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.replay",
+      "Name": "Replay Buffer",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle the replay buffer. Long press stops it.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.savereplay",
+      "Name": "Save Replay",
+      "Icon": "images/icon",
+      "Tooltip": "Save the replay buffer.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.virtualcam",
+      "Name": "Virtual Camera",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle the virtual camera. Long press stops it.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.studiomode",
+      "Name": "Studio Mode",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle studio mode. Long press turns it off.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.studiotransition",
+      "Name": "Studio Transition",
+      "Icon": "images/icon",
+      "Tooltip": "Trigger the studio mode transition.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.scene",
+      "Name": "Scene",
+      "Icon": "images/icon",
+      "Tooltip": "Switch the program scene. Long press sets the preview scene.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.source",
+      "Name": "Source Visibility",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle a source. Long press hides it.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.mute",
+      "Name": "Audio Mute",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle mute. Long press mutes.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.filter",
+      "Name": "Filter",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle a filter. Long press disables it.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.collection",
+      "Name": "Scene Collection",
+      "Icon": "images/icon",
+      "Tooltip": "Switch scene collection.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.profile",
+      "Name": "Profile",
+      "Icon": "images/icon",
+      "Tooltip": "Switch the OBS profile.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.screenshot",
+      "Name": "Screenshot",
+      "Icon": "images/icon",
+      "Tooltip": "Save a source screenshot.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.hotkey",
+      "Name": "Hotkey",
+      "Icon": "images/icon",
+      "Tooltip": "Trigger an OBS hotkey.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.refreshbrowser",
+      "Name": "Refresh Browser",
+      "Icon": "images/icon",
+      "Tooltip": "Refresh a browser source.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.refreshcapture",
+      "Name": "Refresh Capture",
+      "Icon": "images/icon",
+      "Tooltip": "Reactivate a capture device.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.chapter",
+      "Name": "Chapter Marker",
+      "Icon": "images/icon",
+      "Tooltip": "Create a recording chapter.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.media",
+      "Name": "Media Control",
+      "Icon": "images/icon",
+      "Tooltip": "Control a media source.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.stats",
+      "Name": "Stats",
+      "Icon": "images/icon",
+      "Tooltip": "Show OBS performance stats.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.volume",
+      "Name": "Volume Dial",
+      "Icon": "images/icon",
+      "Tooltip": "Adjust input volume. Press to mute.",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Encoder": {
+        "layout": "$B1"
+      },
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.raw",
+      "Name": "Raw Request",
+      "Icon": "images/icon",
+      "Tooltip": "Send one obs-websocket request.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.rawbatch",
+      "Name": "Raw Batch",
+      "Icon": "images/icon",
+      "Tooltip": "Send an obs-websocket request batch.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    }
+  ]
+}

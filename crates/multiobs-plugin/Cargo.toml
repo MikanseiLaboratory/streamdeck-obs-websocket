@@ -11,7 +11,7 @@ name = "multiobs_plugin"
 path = "src/lib.rs"
 
 [[bin]]
-name = "multiobs_plugin"
+name = "plugin"
 path = "src/main.rs"
 
 [[bin]]

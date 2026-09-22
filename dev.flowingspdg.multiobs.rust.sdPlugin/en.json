@@ -1,8 +1,0 @@
-{
-  "Name": "Multi OBS",
-  "Description": "Control any number of OBS Studio instances from Stream Deck.",
-  "dev.flowingspdg.multiobs.rust.stream": { "Name": "Stream", "Tooltip": "Toggle streaming. Long press stops." },
-  "dev.flowingspdg.multiobs.rust.record": { "Name": "Record", "Tooltip": "Toggle recording. Long press stops." },
-  "dev.flowingspdg.multiobs.rust.scene": { "Name": "Scene", "Tooltip": "Switch the program scene. Long press sets the preview scene." },
-  "dev.flowingspdg.multiobs.rust.volume": { "Name": "Volume Dial", "Tooltip": "Adjust input volume. Press to mute." }
-}
