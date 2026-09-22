@@ -315,7 +315,10 @@ impl ObsPool {
         if let Some(session) = self.inner.raw.lock().await.remove(id) {
             return Ok(session);
         }
-        let config = self.config(id).await.ok_or_else(|| CallError::Unknown(id.to_string()))?;
+        let config = self
+            .config(id)
+            .await
+            .ok_or_else(|| CallError::Unknown(id.to_string()))?;
         if !config.enabled {
             return Err(CallError::Unavailable {
                 id: id.to_string(),
@@ -350,7 +353,11 @@ impl ObsPool {
 
     async fn store_client(&self, id: &str, generation: u64, client: Arc<Client>) {
         if self.generation_current(id, generation).await {
-            self.inner.clients.lock().await.insert(id.to_string(), client);
+            self.inner
+                .clients
+                .lock()
+                .await
+                .insert(id.to_string(), client);
         }
     }
 
@@ -389,16 +396,13 @@ async fn supervise(pool: ObsPool, id: String, generation: u64, token: Cancellati
                 let mut events = match client.events() {
                     Ok(events) => events,
                     Err(error) => {
-                        pool.publish_status(
-                            &id,
-                            generation,
-                            classify_error(&error),
-                        )
-                        .await;
+                        pool.publish_status(&id, generation, classify_error(&error))
+                            .await;
                         continue;
                     }
                 };
-                pool.store_client(&id, generation, Arc::clone(&client)).await;
+                pool.store_client(&id, generation, Arc::clone(&client))
+                    .await;
                 pool.publish_status(
                     &id,
                     generation,

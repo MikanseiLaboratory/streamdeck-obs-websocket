@@ -17,27 +17,50 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::auth::authentication_string;
 
 #[derive(Clone)]
+struct MockScenes {
+    program: String,
+    preview: Option<String>,
+    fail_program: bool,
+}
+
+impl Default for MockScenes {
+    fn default() -> Self {
+        Self {
+            program: "Live".into(),
+            preview: None,
+            fail_program: false,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct MockObs {
     pub port: u16,
     requests: Arc<Mutex<Vec<Value>>>,
     events: broadcast::Sender<String>,
     drop_tx: broadcast::Sender<()>,
     password: Option<String>,
+    scenes: Arc<Mutex<MockScenes>>,
 }
 
 impl MockObs {
     pub async fn spawn(password: Option<&str>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind mock OBS");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock OBS");
         let port = listener.local_addr().expect("addr").port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (events, _) = broadcast::channel(32);
         let (drop_tx, _) = broadcast::channel(8);
+        let scenes = Arc::new(Mutex::new(MockScenes::default()));
+        let password = password.map(str::to_string);
         let server = Self {
             port,
             requests: Arc::clone(&requests),
             events: events.clone(),
             drop_tx: drop_tx.clone(),
-            password: password.map(str::to_string),
+            password: password.clone(),
+            scenes: Arc::clone(&scenes),
         };
         let password = server.password.clone();
         tokio::spawn(async move {
@@ -49,8 +72,10 @@ impl MockObs {
                 let events = events.clone();
                 let mut drops = drop_tx.subscribe();
                 let password = password.clone();
+                let scenes = Arc::clone(&scenes);
                 tokio::spawn(async move {
-                    if let Err(error) = handle(stream, addr, password, requests, events, &mut drops).await
+                    if let Err(error) =
+                        handle(stream, addr, password, requests, events, &mut drops, scenes).await
                     {
                         tracing::debug!(%error, "mock OBS connection ended");
                     }
@@ -58,6 +83,17 @@ impl MockObs {
             }
         });
         server
+    }
+
+    pub async fn set_scenes(&self, program: &str, preview: Option<&str>) {
+        let mut scenes = self.scenes.lock().await;
+        scenes.program = program.to_string();
+        scenes.preview = preview.map(str::to_string);
+        scenes.fail_program = false;
+    }
+
+    pub async fn fail_program_scene(&self) {
+        self.scenes.lock().await.fail_program = true;
     }
 
     pub fn push_event(&self, event_type: &str, event_data: Value) {
@@ -88,6 +124,7 @@ async fn handle(
     requests: Arc<Mutex<Vec<Value>>>,
     events: broadcast::Sender<String>,
     drops: &mut broadcast::Receiver<()>,
+    scenes: Arc<Mutex<MockScenes>>,
 ) -> Result<(), String> {
     let stream = tokio_tungstenite::accept_async(stream)
         .await
@@ -168,8 +205,8 @@ async fn handle(
                 let op = value.get("op").and_then(Value::as_u64).unwrap_or(0);
                 let data = value.get("d").cloned().unwrap_or(Value::Null);
                 let response = match op {
-                    6 => Some(answer_request(&data)),
-                    8 => Some(answer_batch(&data)),
+                    6 => Some(answer_request(&data, &scenes).await),
+                    8 => Some(answer_batch(&data, &scenes).await),
                     _ => None,
                 };
                 if let Some(response) = response {
@@ -183,76 +220,141 @@ async fn handle(
     }
 }
 
-fn answer_request(data: &Value) -> Value {
-    let request_type = data.get("requestType").and_then(Value::as_str).unwrap_or("");
+async fn answer_request(data: &Value, scenes: &Mutex<MockScenes>) -> Value {
+    let request_type = data
+        .get("requestType")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let request_id = data.get("requestId").cloned().unwrap_or(Value::Null);
+    let (ok, body) = response_data(request_type, data.get("requestData"), scenes).await;
     json!({
         "op": 7,
         "d": {
             "requestType": request_type,
             "requestId": request_id,
-            "requestStatus": {"result": true, "code": 100},
-            "responseData": response_data(request_type, data.get("requestData")),
+            "requestStatus": {"result": ok, "code": if ok { 100 } else { 604 }},
+            "responseData": body,
         }
     })
 }
 
-fn answer_batch(data: &Value) -> Value {
+async fn answer_batch(data: &Value, scenes: &Mutex<MockScenes>) -> Value {
     let request_id = data.get("requestId").cloned().unwrap_or(Value::Null);
-    let results: Vec<Value> = data
+    let requests = data
         .get("requests")
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|request| {
-            let request_type = request.get("requestType").and_then(Value::as_str).unwrap_or("");
-            json!({
-                "requestType": request_type,
-                "requestStatus": {"result": true, "code": 100},
-                "responseData": response_data(request_type, request.get("requestData")),
-            })
-        })
-        .collect();
+        .unwrap_or_default();
+    let mut results = Vec::new();
+    for request in requests {
+        let request_type = request
+            .get("requestType")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let (ok, body) = response_data(request_type, request.get("requestData"), scenes).await;
+        results.push(json!({
+            "requestType": request_type,
+            "requestStatus": {"result": ok, "code": if ok { 100 } else { 604 }},
+            "responseData": body,
+        }));
+    }
     json!({
         "op": 9,
         "d": { "requestId": request_id, "results": results }
     })
 }
 
-fn response_data(request_type: &str, _request_data: Option<&Value>) -> Value {
+async fn response_data(
+    request_type: &str,
+    request_data: Option<&Value>,
+    scenes: &Mutex<MockScenes>,
+) -> (bool, Value) {
     match request_type {
-        "GetVersion" => json!({
-            "obsStudioVersion": "31.0.0",
-            "obsWebSocketVersion": "5.5.4",
-            "rpcVersion": 1,
-            "availableRequests": ["GetVersion"],
-            "supportedImageFormats": ["png"],
-            "platform": "macos",
-            "platformDescription": "mock"
-        }),
-        "GetStreamStatus" => json!({
-            "outputActive": false,
-            "outputReconnecting": false,
-            "outputTimecode": "00:00:00.000",
-            "outputDuration": 0,
-            "outputCongestion": 0.0,
-            "outputBytes": 0,
-            "outputSkippedFrames": 0,
-            "outputTotalFrames": 0
-        }),
-        "ToggleStream" | "StartStream" | "StopStream" => json!({"outputActive": true}),
-        "GetSceneList" => json!({
-            "currentProgramSceneName": "Live",
-            "currentProgramSceneUuid": "11111111-1111-1111-1111-111111111111",
-            "scenes": [{
-                "sceneName": "Live",
-                "sceneUuid": "11111111-1111-1111-1111-111111111111",
-                "sceneIndex": 0
-            }]
-        }),
-        _ => json!({}),
+        "GetVersion" => (
+            true,
+            json!({
+                "obsStudioVersion": "31.0.0",
+                "obsWebSocketVersion": "5.5.4",
+                "rpcVersion": 1,
+                "availableRequests": ["GetVersion"],
+                "supportedImageFormats": ["png"],
+                "platform": "macos",
+                "platformDescription": "mock"
+            }),
+        ),
+        "GetStreamStatus" => (
+            true,
+            json!({
+                "outputActive": false,
+                "outputReconnecting": false,
+                "outputTimecode": "00:00:00.000",
+                "outputDuration": 0,
+                "outputCongestion": 0.0,
+                "outputBytes": 0,
+                "outputSkippedFrames": 0,
+                "outputTotalFrames": 0
+            }),
+        ),
+        "ToggleStream" | "StartStream" | "StopStream" => (true, json!({"outputActive": true})),
+        "GetSceneList" => {
+            let scenes = scenes.lock().await;
+            let mut body = json!({
+                "currentProgramSceneName": scenes.program,
+                "currentProgramSceneUuid": "11111111-1111-1111-1111-111111111111",
+                "scenes": [{
+                    "sceneName": scenes.program,
+                    "sceneUuid": "11111111-1111-1111-1111-111111111111",
+                    "sceneIndex": 0
+                }]
+            });
+            if let Some(preview) = &scenes.preview {
+                body["currentPreviewSceneName"] = json!(preview);
+                body["currentPreviewSceneUuid"] = json!("22222222-2222-2222-2222-222222222222");
+            }
+            (true, body)
+        }
+        "GetCurrentProgramScene" => {
+            let scenes = scenes.lock().await;
+            if scenes.fail_program {
+                (false, json!({}))
+            } else {
+                (true, scene_body(&scenes.program))
+            }
+        }
+        "SetCurrentProgramScene" => {
+            if let Some(name) = request_data
+                .and_then(|data| data.get("sceneName"))
+                .and_then(Value::as_str)
+            {
+                scenes.lock().await.program = name.to_string();
+            }
+            (true, json!({}))
+        }
+        "GetCurrentPreviewScene" => {
+            let scenes = scenes.lock().await;
+            match &scenes.preview {
+                Some(name) => (true, scene_body(name)),
+                None => (false, json!({})),
+            }
+        }
+        "SetCurrentPreviewScene" => {
+            if let Some(name) = request_data
+                .and_then(|data| data.get("sceneName"))
+                .and_then(Value::as_str)
+            {
+                scenes.lock().await.preview = Some(name.to_string());
+            }
+            (true, json!({}))
+        }
+        _ => (true, json!({})),
     }
+}
+
+fn scene_body(name: &str) -> Value {
+    json!({
+        "sceneName": name,
+        "sceneUuid": "11111111-1111-1111-1111-111111111111"
+    })
 }
 
 async fn next_json(

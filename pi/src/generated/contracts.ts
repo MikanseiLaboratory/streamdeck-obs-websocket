@@ -6,7 +6,9 @@ export type ActionParams = { sceneName: string, sourceName: string, inputName: s
 
 export type AdvancedSettings = { longPress: boolean, longPressMs: number, };
 
-export type CommonSettings = { target: TargetSelector, sharedParams: boolean, };
+export type CommonSettings = { target: TargetSelector, sharedParams: boolean, sceneOutput: SceneOutput, };
+
+export type SceneOutput = "program" | "preview" | "both";
 
 export type GlobalSettings = { instances: Array<InstanceConfig>, groups: Array<TargetGroup>, longPressMs: number, fgColor: string, };
 

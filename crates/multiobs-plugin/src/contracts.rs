@@ -79,8 +79,12 @@ impl From<TargetGroup> for PoolGroup {
 pub enum TargetSelector {
     #[default]
     All,
-    Group { id: String },
-    Instances { ids: Vec<String> },
+    Group {
+        id: String,
+    },
+    Instances {
+        ids: Vec<String>,
+    },
 }
 
 impl From<&TargetSelector> for PoolSelector {
@@ -126,6 +130,21 @@ impl Default for GlobalSettings {
     }
 }
 
+/// Which OBS canvas a scene key follows.
+///
+/// `Program` keeps existing keys: a short press sets the program scene, and the
+/// strip lights when that scene is on program. `Preview` does the same for the
+/// studio-mode preview. `Both` lights fully for program and amber for preview only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub enum SceneOutput {
+    #[default]
+    Program,
+    Preview,
+    Both,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[ts(export, rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -134,6 +153,8 @@ pub struct CommonSettings {
     pub target: TargetSelector,
     #[serde(default = "default_true")]
     pub shared_params: bool,
+    #[serde(default)]
+    pub scene_output: SceneOutput,
 }
 
 impl Default for CommonSettings {
@@ -141,6 +162,7 @@ impl Default for CommonSettings {
         Self {
             target: TargetSelector::All,
             shared_params: true,
+            scene_output: SceneOutput::Program,
         }
     }
 }
@@ -287,6 +309,7 @@ export_ts!(InstanceConfig);
 export_ts!(TargetGroup);
 export_ts!(TargetSelector);
 export_ts!(GlobalSettings);
+export_ts!(SceneOutput);
 export_ts!(CommonSettings);
 export_ts!(AdvancedSettings);
 export_ts!(ActionParams);

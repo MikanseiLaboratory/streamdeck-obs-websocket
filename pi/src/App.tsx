@@ -12,6 +12,7 @@ import type {
   ActionSettings,
   GlobalSettings,
   InstanceConfig,
+  SceneOutput,
   TargetGroup,
   TargetSelector
 } from "./generated/contracts";
@@ -42,7 +43,7 @@ const emptyParams = (): ActionParams => ({
 });
 
 const actionDefaults: ActionSettings = {
-  common: { target: { kind: "all" }, sharedParams: true },
+  common: { target: { kind: "all" }, sharedParams: true, sceneOutput: "program" },
   advanced: { longPress: false, longPressMs: 0 },
   shared: emptyParams(),
   params: {}
@@ -396,6 +397,26 @@ function Params({
   return (
     <>
       <div className="sdpi-heading">Action</div>
+      {kind === "scene" && (
+        <div type="select" className="sdpi-item">
+          <div className="sdpi-item-label">Output</div>
+          <select
+            className="sdpi-item-value select"
+            value={settings.common?.sceneOutput ?? "program"}
+            onChange={(event) => {
+              const sceneOutput = event.target.value as SceneOutput;
+              setSettings((previous) => ({
+                ...previous,
+                common: { ...previous.common, sceneOutput }
+              }));
+            }}
+          >
+            <option value="program">Program</option>
+            <option value="preview">Preview</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+      )}
       {!shared && (
         <div type="select" className="sdpi-item">
           <div className="sdpi-item-label">Instance</div>

@@ -21,13 +21,19 @@ fn instance(id: &str, port: u16, password: &str) -> ObsInstanceConfig {
 
 async fn wait_connected(pool: &ObsPool, id: &str) {
     let mut events = pool.subscribe();
-    if pool.status(id).await.is_some_and(|status| status.is_connected()) {
+    if pool
+        .status(id)
+        .await
+        .is_some_and(|status| status.is_connected())
+    {
         return;
     }
     tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match events.recv().await {
-                Ok(PoolEvent::Status(status)) if status.id == id && status.status.is_connected() => {
+                Ok(PoolEvent::Status(status))
+                    if status.id == id && status.status.is_connected() =>
+                {
                     return;
                 }
                 Ok(_) => {}
@@ -61,7 +67,11 @@ fn resolves_targets_in_configuration_order() {
         vec!["a".to_string(), "b".to_string()]
     );
     assert_eq!(
-        resolve_targets(&TargetSelector::Group { id: "g".into() }, &instances, &groups),
+        resolve_targets(
+            &TargetSelector::Group { id: "g".into() },
+            &instances,
+            &groups
+        ),
         vec!["a".to_string(), "c".to_string()]
     );
     assert_eq!(
@@ -89,7 +99,10 @@ async fn connects_toggles_and_receives_events() {
     let active = client.streaming().toggle().await.expect("toggle");
     assert!(active);
 
-    server.push_event("StreamStateChanged", json!({"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTED"}));
+    server.push_event(
+        "StreamStateChanged",
+        json!({"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTED"}),
+    );
     let event = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if let Ok(PoolEvent::Obs { id, event }) = events.recv().await {
@@ -101,7 +114,10 @@ async fn connects_toggles_and_receives_events() {
     })
     .await
     .expect("event");
-    assert!(matches!(event, obws::events::Event::StreamStateChanged { active: true, .. }));
+    assert!(matches!(
+        event,
+        obws::events::Event::StreamStateChanged { active: true, .. }
+    ));
 
     let listed = pool
         .raw_request("main", "GetSceneList", json!({}))
@@ -120,7 +136,10 @@ async fn connects_toggles_and_receives_events() {
         )
         .await
         .expect("batch");
-    assert_eq!(batch["results"][0]["responseData"]["obsStudioVersion"], "31.0.0");
+    assert_eq!(
+        batch["results"][0]["responseData"]["obsStudioVersion"],
+        "31.0.0"
+    );
 }
 
 #[tokio::test]
@@ -132,7 +151,10 @@ async fn reports_authentication_failure_then_reconnects_after_drop() {
 
     tokio::time::timeout(Duration::from_secs(4), async {
         loop {
-            if matches!(pool.status("locked").await, Some(ConnectionStatus::AuthFailed { .. })) {
+            if matches!(
+                pool.status("locked").await,
+                Some(ConnectionStatus::AuthFailed { .. })
+            ) {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(40)).await;

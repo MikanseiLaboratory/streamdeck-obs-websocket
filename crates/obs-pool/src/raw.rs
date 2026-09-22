@@ -47,11 +47,7 @@ pub struct RawSession {
 }
 
 impl RawSession {
-    pub async fn connect(
-        host: &str,
-        port: u16,
-        password: Option<&str>,
-    ) -> Result<Self, RawError> {
+    pub async fn connect(host: &str, port: u16, password: Option<&str>) -> Result<Self, RawError> {
         let url = format!("ws://{host}:{port}");
         let (stream, _) = tokio::time::timeout(Duration::from_secs(5), connect_async(&url))
             .await
@@ -63,7 +59,11 @@ impl RawSession {
         if hello.op != 0 {
             return Err(RawError::Protocol);
         }
-        let rpc_version = hello.data.get("rpcVersion").and_then(Value::as_u64).unwrap_or(1);
+        let rpc_version = hello
+            .data
+            .get("rpcVersion")
+            .and_then(Value::as_u64)
+            .unwrap_or(1);
         let authentication = match (
             hello.data.get("authentication"),
             password.filter(|value| !value.is_empty()),
@@ -100,7 +100,11 @@ impl RawSession {
         })
     }
 
-    pub async fn request(&mut self, request_type: &str, request_data: Value) -> Result<Value, RawError> {
+    pub async fn request(
+        &mut self,
+        request_type: &str,
+        request_data: Value,
+    ) -> Result<Value, RawError> {
         let request_id = self.alloc_id();
         send_text(
             &mut self.write,
@@ -160,11 +164,7 @@ impl RawSession {
         loop {
             let message = next_data(&mut self.read).await?;
             if message.op == op
-                && message
-                    .data
-                    .get("requestId")
-                    .and_then(Value::as_str)
-                    == Some(request_id)
+                && message.data.get("requestId").and_then(Value::as_str) == Some(request_id)
             {
                 return Ok(message.data);
             }
@@ -196,8 +196,7 @@ async fn next_data(
     let text = message
         .to_text()
         .map_err(|error| RawError::WebSocket(error.to_string()))?;
-    let value: Value =
-        serde_json::from_str(text).map_err(|_| RawError::Protocol)?;
+    let value: Value = serde_json::from_str(text).map_err(|_| RawError::Protocol)?;
     Ok(Incoming {
         op: value.get("op").and_then(Value::as_u64).unwrap_or(255) as u8,
         data: value.get("d").cloned().unwrap_or(Value::Null),
@@ -217,7 +216,10 @@ async fn send_text(
 
 fn request_result(request_type: &str, data: &Value) -> Result<Value, RawError> {
     let status = data.get("requestStatus").cloned().unwrap_or(Value::Null);
-    let ok = status.get("result").and_then(Value::as_bool).unwrap_or(false);
+    let ok = status
+        .get("result")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if !ok {
         return Err(RawError::Request {
             request_type: request_type.to_string(),
@@ -229,5 +231,8 @@ fn request_result(request_type: &str, data: &Value) -> Result<Value, RawError> {
                 .to_string(),
         });
     }
-    Ok(data.get("responseData").cloned().unwrap_or_else(|| json!({})))
+    Ok(data
+        .get("responseData")
+        .cloned()
+        .unwrap_or_else(|| json!({})))
 }
