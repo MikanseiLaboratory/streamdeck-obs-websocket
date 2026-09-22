@@ -1,0 +1,38 @@
+[package]
+name = "multiobs-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "multiobs_plugin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "multiobs_plugin"
+path = "src/main.rs"
+
+[[bin]]
+name = "typegen"
+path = "src/bin/typegen.rs"
+
+[dependencies]
+anyhow = "1"
+base64.workspace = true
+futures-util.workspace = true
+obs-pool = { path = "../obs-pool" }
+obws.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+streamdeck-plugin = { version = "0.1", features = ["macros", "typegen"] }
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+ts-rs = "10.1"
+uuid.workspace = true
+
+[dev-dependencies]
+obs-pool = { path = "../obs-pool", features = ["mock"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
