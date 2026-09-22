@@ -1,39 +1,43 @@
 # Multi OBS
 
-任意の台数の OBS Studio を、名前付きインスタンスとして Stream Deck から操作するプラグインです。接続先は固定の 2 台ではなく、追加、削除、並べ替えができます。アクションは「すべての有効なインスタンス」「グループ」「個別選択」のいずれかにファンアウトします。
+Stream Deck plugin for any number of named OBS Studio instances. Add, remove, and reorder them. Each action targets all enabled instances, a group, or a selection.
 
-## 必要環境
+## Requirements
 
-- Stream Deck 6.4 以降
-- OBS Studio 30.2 以降 (obs-websocket 5.5。OBS に同梱されています)
-- 各 OBS の WebSocket サーバを有効にし、ポートが重ならないようにする
+- Stream Deck 6.4+
+- OBS Studio 30.2+ (obs-websocket 5.5, bundled with OBS)
+- WebSocket server on for each OBS, each on its own port
 
-## ビルド
+## Build
 
 ```bash
 cargo test --workspace
 ./publish.sh
 ```
 
-macOS では arm64 と x64 をユニバーサルバイナリ `bin/plugin` にまとめます。Windows 用は `bin/plugin.exe` で、`publish.ps1` が生成します。プラグイン本体は `plugin/dev.mikanseilaboratory.obs.websocket.sdPlugin` です。
+macOS: `publish.sh` writes a universal `bin/plugin` (arm64 and x64). Windows: `publish.ps1` writes `bin/plugin.exe`. The bundle is `plugin/dev.mikanseilaboratory.obs.websocket.sdPlugin`.
 
-`INSTALL=1 ./publish.sh` は macOS の Stream Deck プラグインフォルダへコピーします。
+`INSTALL=1 ./publish.sh` copies it into the macOS Stream Deck plugin folder.
 
-## 使い方
+## Usage
 
-1. キーのプロパティインスペクタで Send to から、そのキーが操作する OBS を選ぶ。すべての有効なインスタンス、グループ、1 台、または複数台を指定できる。
-2. 同じインスペクタの Manage instances から接続設定ウィンドウを開く。OBS の追加、削除、並べ替え、グループはそこで行う。
-3. 接続状態は設定ウィンドウの色で分かる。緑が接続済み、黄が接続中、赤が認証失敗、茶が到達不能。
-4. 「すべての対象で同じパラメータ」を外すと、インスタンスごとのシーン名などを分けて保存できる。
-5. 一覧に出る名前のうち、一部の OBS にしか無いものは警告される。
-6. 長押しを有効にすると、配信や録画は停止、シーンはプレビューへのセット、ソースは非表示、ミュートはミュート固定になる。
+1. In the key inspector, choose **Send to**: all enabled instances, a group, or specific instances.
+2. **Manage instances** in the same inspector adds, removes, reorders, and groups connections.
+3. Status colors: green connected, yellow connecting, red auth failed, brown unreachable.
+4. Turn off “same parameters for every target” to store per-instance values, such as scene names.
+5. Names missing on some instances are flagged.
+6. Long press stops streaming and recording, sets the scene to preview, hides the source, and holds mute on.
 
-キー下端の帯がインスタンスごとの状態です。6 台までは頭文字、それ以上は色だけを表示します。帯の色はインスタンスに付けた色です。
+A strip under the key shows each instance. Up to six show initials; more than that show color only. The color is the one set on the instance.
 
-パスワードは Stream Deck のグローバル設定に保存されます。
+Passwords are stored in Stream Deck global settings.
 
-## 構成
+## Layout
 
-- `streamdeck-plugin` 0.1 が Stream Deck との WebSocket を担当する
-- `obws` 0.15 が型付きの OBS WebSocket v5 クライアント
-- Raw Request / Raw Batch だけは、`obws` が生リクエストを公開していないため別ソケットで op 6 / op 8 を送る
+- `streamdeck-plugin` 0.1 talks to Stream Deck.
+- `obws` 0.15 is the typed OBS WebSocket v5 client.
+- Raw Request and Raw Batch use a separate socket (op 6 and op 8). `obws` does not expose raw requests.
+
+## License
+
+[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE).

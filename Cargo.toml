@@ -6,7 +6,7 @@ members = ["crates/obs-pool", "crates/multiobs-plugin"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1"
