@@ -1,0 +1,9 @@
+{
+  "Name": "OBS Websocket [MikanseiLaboratory]",
+  "Description": "Control any number of OBS Studio instances from Stream Deck.",
+  "Category": "OBS Websocket [MikanseiLaboratory]",
+  "dev.mikanseilaboratory.obs.websocket.stream": { "Name": "Stream", "Tooltip": "Toggle streaming. Long press stops." },
+  "dev.mikanseilaboratory.obs.websocket.record": { "Name": "Record", "Tooltip": "Toggle recording. Long press stops." },
+  "dev.mikanseilaboratory.obs.websocket.scene": { "Name": "Scene", "Tooltip": "Switch the program scene. Long press sets the preview scene." },
+  "dev.mikanseilaboratory.obs.websocket.volume": { "Name": "Volume Dial", "Tooltip": "Adjust input volume. Press to mute." }
+}

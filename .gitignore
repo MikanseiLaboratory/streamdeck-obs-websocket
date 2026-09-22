@@ -1,0 +1,8 @@
+/target
+**/node_modules
+crates/multiobs-plugin/bindings
+**/*.sdPlugin/bin
+**/*.sdPlugin/propertyinspector
+.DS_Store
+*.streamDeckPlugin
+artifacts
