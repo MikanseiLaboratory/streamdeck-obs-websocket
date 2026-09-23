@@ -35,5 +35,5 @@ macOS では arm64 と x64 をユニバーサルバイナリ `bin/plugin` にま
 ## 構成
 
 - `streamdeck-plugin` 0.1 が Stream Deck との WebSocket を担当する
-- `obws` 0.15 が型付きの OBS WebSocket v5 クライアント
-- Raw Request / Raw Batch だけは、`obws` が生リクエストを公開していないため別ソケットで op 6 / op 8 を送る
+- `obs-websocket`（git rev `8fe8125ffa23e67c76741c3bfdb74b52a3a7e907`）が型付きの OBS WebSocket v5 クライアント
+- 型付きリクエスト、Raw Request、Raw Batch は同じセッションを使う

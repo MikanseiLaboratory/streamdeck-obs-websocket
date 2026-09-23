@@ -1,20 +1,25 @@
-use std::path::Path;
-
-use obws::client::Client;
-use obws::common::MediaAction;
-use obws::events::Event;
-use obws::requests::filters::SetEnabled as SetFilterEnabled;
-use obws::requests::hotkeys::KeyModifiers;
-use obws::requests::inputs::{InputId, Volume};
-use obws::requests::scene_items::SetEnabled as SetItemEnabled;
-use obws::requests::scenes::SceneId;
-use obws::requests::sources::{SaveScreenshot, SourceId};
+use obs_websocket::{Client, Event};
+use obs_websocket_core::requests::{
+    CreateRecordChapter, GetInputList, GetInputMute, GetInputVolume, GetMediaInputStatus,
+    GetSceneItemEnabled, GetSceneItemList, GetSceneList, GetSourceFilter, GetSourceFilterList,
+    PressInputPropertiesButton, SaveSourceScreenshot, SetCurrentPreviewScene, SetCurrentProfile,
+    SetCurrentProgramScene, SetCurrentSceneCollection, SetInputMute, SetInputVolume,
+    SetSceneItemEnabled, SetSourceFilterEnabled, SetStudioModeEnabled, ToggleInputMute,
+    TriggerHotkeyByKeySequence, TriggerHotkeyByName, TriggerMediaInputAction,
+};
+use obs_websocket_core::types::KeyModifiers;
+use obs_websocket_core::ObsMediaInputAction;
 use serde_json::{json, Value};
 
 use crate::contracts::{ActionParams, SceneOutput};
 use crate::kind::{ActionKind, PressKind};
 use crate::render::SegmentState;
-use obs_pool::{RawCall, RawError};
+use obs_pool::RawCall;
+
+const MEDIA_PLAYING: &str = "OBS_MEDIA_STATE_PLAYING";
+const MEDIA_PAUSED: &str = "OBS_MEDIA_STATE_PAUSED";
+const MEDIA_BUFFERING: &str = "OBS_MEDIA_STATE_BUFFERING";
+const MEDIA_OPENING: &str = "OBS_MEDIA_STATE_OPENING";
 
 type ObsResult<T> = Result<T, String>;
 
@@ -33,13 +38,17 @@ pub async fn execute(
         ActionKind::RecordPause => record_pause(client, press).await,
         ActionKind::Replay => replay(client, press).await,
         ActionKind::SaveReplay => {
-            client.replay_buffer().save().await.map_err(text)?;
+            client.outputs().save_replay_buffer().await.map_err(text)?;
             Ok(SegmentState::Neutral)
         }
         ActionKind::VirtualCam => virtual_cam(client, press).await,
         ActionKind::StudioMode => studio(client, press).await,
         ActionKind::StudioTransition => {
-            client.transitions().trigger().await.map_err(text)?;
+            client
+                .transitions()
+                .trigger_studio_mode_transition()
+                .await
+                .map_err(text)?;
             Ok(SegmentState::Neutral)
         }
         ActionKind::Scene => scene(client, params, scene_output, press).await,
@@ -59,10 +68,13 @@ pub async fn execute(
             Ok(SegmentState::Neutral)
         }
         ActionKind::Chapter => {
-            let name = blank(&params.chapter_name);
+            let mut request = CreateRecordChapter::new();
+            if let Some(name) = blank(&params.chapter_name) {
+                request = request.chapter_name(name);
+            }
             client
-                .recording()
-                .create_chapter(name)
+                .record()
+                .create_record_chapter(&request)
                 .await
                 .map_err(text)?;
             Ok(SegmentState::Neutral)
@@ -83,40 +95,48 @@ pub async fn fetch_state(
 ) -> ObsResult<SegmentState> {
     match kind {
         ActionKind::Stream => {
-            let status = client.streaming().status().await.map_err(text)?;
-            Ok(if status.reconnecting {
+            let status = client.stream().get_stream_status().await.map_err(text)?;
+            Ok(if status.output_reconnecting {
                 SegmentState::Intermediate
-            } else if status.active {
+            } else if status.output_active {
                 SegmentState::Active
             } else {
                 SegmentState::Inactive
             })
         }
         ActionKind::Record => {
-            let status = client.recording().status().await.map_err(text)?;
-            Ok(output_flag(status.active, status.paused))
+            let status = client.record().get_record_status().await.map_err(text)?;
+            Ok(output_flag(status.output_active, status.output_paused))
         }
         ActionKind::RecordPause => {
-            let status = client.recording().status().await.map_err(text)?;
-            Ok(if !status.active {
+            let status = client.record().get_record_status().await.map_err(text)?;
+            Ok(if !status.output_active {
                 SegmentState::Inactive
-            } else if status.paused {
+            } else if status.output_paused {
                 SegmentState::Active
             } else {
                 SegmentState::Intermediate
             })
         }
         ActionKind::Replay => {
-            let active = client.replay_buffer().status().await.map_err(text)?;
-            Ok(flag(active))
+            let status = client
+                .outputs()
+                .get_replay_buffer_status()
+                .await
+                .map_err(text)?;
+            Ok(flag(status.output_active))
         }
         ActionKind::VirtualCam => {
-            let active = client.virtual_cam().status().await.map_err(text)?;
-            Ok(flag(active))
+            let status = client
+                .outputs()
+                .get_virtual_cam_status()
+                .await
+                .map_err(text)?;
+            Ok(flag(status.output_active))
         }
         ActionKind::StudioMode => {
-            let enabled = client.ui().studio_mode_enabled().await.map_err(text)?;
-            Ok(flag(enabled))
+            let enabled = client.ui().get_studio_mode_enabled().await.map_err(text)?;
+            Ok(flag(enabled.studio_mode_enabled))
         }
         ActionKind::Scene => scene_state(client, params, scene_output).await,
         ActionKind::Source => {
@@ -126,50 +146,60 @@ pub async fn fetch_state(
             };
             let enabled = client
                 .scene_items()
-                .enabled(SceneId::Name(&params.scene_name), item_id)
+                .get_scene_item_enabled(
+                    &GetSceneItemEnabled::new(item_id).scene_name(&params.scene_name),
+                )
                 .await
-                .map_err(text)?;
+                .map_err(text)?
+                .scene_item_enabled;
             Ok(flag(enabled))
         }
         ActionKind::Mute => {
             let muted = client
                 .inputs()
-                .muted(InputId::Name(&params.input_name))
+                .get_input_mute(&GetInputMute::new().input_name(&params.input_name))
                 .await
-                .map_err(text)?;
+                .map_err(text)?
+                .input_muted;
             Ok(flag(muted))
         }
         ActionKind::Filter => {
             let filter = client
                 .filters()
-                .get(SourceId::Name(&params.source_name), &params.filter_name)
+                .get_source_filter(
+                    &GetSourceFilter::new(&params.filter_name).source_name(&params.source_name),
+                )
                 .await
                 .map_err(text)?;
-            Ok(flag(filter.enabled))
+            Ok(flag(filter.filter_enabled))
         }
         ActionKind::Collection => {
-            let current = client.scene_collections().current().await.map_err(text)?;
+            let current = client
+                .config()
+                .get_scene_collection_list()
+                .await
+                .map_err(text)?;
             Ok(flag(
-                current == params.collection_name && !params.collection_name.is_empty(),
+                current.current_scene_collection_name == params.collection_name
+                    && !params.collection_name.is_empty(),
             ))
         }
         ActionKind::Profile => {
-            let current = client.profiles().current().await.map_err(text)?;
+            let current = client.config().get_profile_list().await.map_err(text)?;
             Ok(flag(
-                current == params.profile_name && !params.profile_name.is_empty(),
+                current.current_profile_name == params.profile_name
+                    && !params.profile_name.is_empty(),
             ))
         }
         ActionKind::Media => {
             let status = client
                 .media_inputs()
-                .status(InputId::Name(&params.input_name))
+                .get_media_input_status(&GetMediaInputStatus::new().input_name(&params.input_name))
                 .await
                 .map_err(text)?;
-            Ok(match status.state {
-                obws::responses::media_inputs::MediaState::Playing => SegmentState::Active,
-                obws::responses::media_inputs::MediaState::Paused
-                | obws::responses::media_inputs::MediaState::Buffering
-                | obws::responses::media_inputs::MediaState::Opening => SegmentState::Intermediate,
+            Ok(match status.media_state.as_str() {
+                MEDIA_PLAYING => SegmentState::Active,
+                MEDIA_PAUSED | MEDIA_BUFFERING | MEDIA_OPENING => SegmentState::Intermediate,
                 _ => SegmentState::Inactive,
             })
         }
@@ -235,7 +265,7 @@ fn follows_preview(scene_output: SceneOutput) -> bool {
 }
 
 pub async fn stat_line(client: &Client, params: &ActionParams) -> ObsResult<String> {
-    let stats = client.general().stats().await.map_err(text)?;
+    let stats = client.general().get_stats().await.map_err(text)?;
     let line = match params.stat.as_str() {
         "cpu" => format!("CPU {:.0}%", stats.cpu_usage),
         "memory" => format!("{:.0} MB", stats.memory_usage),
@@ -248,10 +278,10 @@ pub async fn stat_line(client: &Client, params: &ActionParams) -> ObsResult<Stri
 pub async fn volume_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
     let current = client
         .inputs()
-        .volume(InputId::Name(&params.input_name))
+        .get_input_volume(&GetInputVolume::new().input_name(&params.input_name))
         .await
         .map_err(text)?;
-    Ok(format!("{:.1} dB", current.db))
+    Ok(format!("{:.1} dB", current.input_volume_db))
 }
 
 pub async fn adjust_volume(
@@ -259,55 +289,64 @@ pub async fn adjust_volume(
     params: &ActionParams,
     ticks: i32,
 ) -> ObsResult<String> {
-    let input = InputId::Name(&params.input_name);
-    let current = client.inputs().volume(input).await.map_err(text)?;
-    let step = if params.step_db == 0.0 {
+    let current = client
+        .inputs()
+        .get_input_volume(&GetInputVolume::new().input_name(&params.input_name))
+        .await
+        .map_err(text)?;
+    let step = f64::from(if params.step_db == 0.0 {
         1.0
     } else {
         params.step_db
-    };
-    let next = (current.db + ticks as f32 * step).clamp(-96.0, 26.0);
+    });
+    let next = (current.input_volume_db + f64::from(ticks) * step).clamp(-96.0, 26.0);
     client
         .inputs()
-        .set_volume(input, Volume::Db(next))
+        .set_input_volume(
+            &SetInputVolume::new()
+                .input_name(&params.input_name)
+                .input_volume_db(next),
+        )
         .await
         .map_err(text)?;
     Ok(format!("{next:.1} dB"))
 }
 
 pub async fn toggle_mute(client: &Client, params: &ActionParams) -> ObsResult<bool> {
-    client
+    Ok(client
         .inputs()
-        .toggle_mute(InputId::Name(&params.input_name))
+        .toggle_input_mute(&ToggleInputMute::new().input_name(&params.input_name))
         .await
-        .map_err(text)
+        .map_err(text)?
+        .input_muted)
 }
 
 async fn stream(client: &Client, press: PressKind) -> ObsResult<SegmentState> {
     if press == PressKind::Long {
-        client.streaming().stop().await.map_err(text)?;
+        client.stream().stop_stream().await.map_err(text)?;
         return Ok(SegmentState::Inactive);
     }
-    let active = client.streaming().toggle().await.map_err(text)?;
-    Ok(flag(active))
+    let active = client.stream().toggle_stream().await.map_err(text)?;
+    Ok(flag(active.output_active))
 }
 
 async fn record(client: &Client, press: PressKind) -> ObsResult<SegmentState> {
     if press == PressKind::Long {
-        client.recording().stop().await.map_err(text)?;
+        client.record().stop_record().await.map_err(text)?;
         return Ok(SegmentState::Inactive);
     }
-    let active = client.recording().toggle().await.map_err(text)?;
-    Ok(flag(active))
+    let active = client.record().toggle_record().await.map_err(text)?;
+    Ok(flag(active.output_active))
 }
 
 async fn record_pause(client: &Client, press: PressKind) -> ObsResult<SegmentState> {
     if press == PressKind::Long {
-        client.recording().resume().await.map_err(text)?;
+        client.record().resume_record().await.map_err(text)?;
         return Ok(SegmentState::Intermediate);
     }
-    let paused = client.recording().toggle_pause().await.map_err(text)?;
-    Ok(if paused {
+    client.record().toggle_record_pause().await.map_err(text)?;
+    let status = client.record().get_record_status().await.map_err(text)?;
+    Ok(if status.output_paused {
         SegmentState::Active
     } else {
         SegmentState::Intermediate
@@ -316,28 +355,37 @@ async fn record_pause(client: &Client, press: PressKind) -> ObsResult<SegmentSta
 
 async fn replay(client: &Client, press: PressKind) -> ObsResult<SegmentState> {
     if press == PressKind::Long {
-        client.replay_buffer().stop().await.map_err(text)?;
+        client.outputs().stop_replay_buffer().await.map_err(text)?;
         return Ok(SegmentState::Inactive);
     }
-    let active = client.replay_buffer().toggle().await.map_err(text)?;
-    Ok(flag(active))
+    let active = client
+        .outputs()
+        .toggle_replay_buffer()
+        .await
+        .map_err(text)?;
+    Ok(flag(active.output_active))
 }
 
 async fn virtual_cam(client: &Client, press: PressKind) -> ObsResult<SegmentState> {
     if press == PressKind::Long {
-        client.virtual_cam().stop().await.map_err(text)?;
+        client.outputs().stop_virtual_cam().await.map_err(text)?;
         return Ok(SegmentState::Inactive);
     }
-    let active = client.virtual_cam().toggle().await.map_err(text)?;
-    Ok(flag(active))
+    let active = client.outputs().toggle_virtual_cam().await.map_err(text)?;
+    Ok(flag(active.output_active))
 }
 
 async fn studio(client: &Client, press: PressKind) -> ObsResult<SegmentState> {
-    let enabled = client.ui().studio_mode_enabled().await.map_err(text)?;
+    let enabled = client
+        .ui()
+        .get_studio_mode_enabled()
+        .await
+        .map_err(text)?
+        .studio_mode_enabled;
     let next = press != PressKind::Long && !enabled;
     client
         .ui()
-        .set_studio_mode_enabled(next)
+        .set_studio_mode_enabled(&SetStudioModeEnabled::new(next))
         .await
         .map_err(text)?;
     Ok(flag(next))
@@ -352,9 +400,14 @@ async fn scene(
     if params.scene_name.is_empty() {
         return Ok(SegmentState::Inactive);
     }
-    let scene = SceneId::Name(&params.scene_name);
     if sends_preview(output, press) {
-        return match client.scenes().set_current_preview_scene(scene).await {
+        return match client
+            .scenes()
+            .set_current_preview_scene(
+                &SetCurrentPreviewScene::new().scene_name(&params.scene_name),
+            )
+            .await
+        {
             Ok(()) => Ok(if output == SceneOutput::Preview {
                 SegmentState::Active
             } else {
@@ -365,7 +418,7 @@ async fn scene(
     }
     client
         .scenes()
-        .set_current_program_scene(scene)
+        .set_current_program_scene(&SetCurrentProgramScene::new().scene_name(&params.scene_name))
         .await
         .map_err(text)?;
     Ok(SegmentState::Active)
@@ -393,10 +446,10 @@ async fn scene_state(
     } else {
         let current = client
             .scenes()
-            .current_program_scene()
+            .get_current_program_scene()
             .await
             .map_err(text)?;
-        current.id.name == params.scene_name
+        current.scene_name == params.scene_name
     };
     if program_match {
         return Ok(SegmentState::Active);
@@ -416,8 +469,8 @@ async fn scene_state(
 }
 
 async fn preview_matches(client: &Client, params: &ActionParams) -> bool {
-    match client.scenes().current_preview_scene().await {
-        Ok(scene) => scene.id.name == params.scene_name,
+    match client.scenes().get_current_preview_scene().await {
+        Ok(scene) => scene.scene_name == params.scene_name,
         Err(_) => false,
     }
 }
@@ -438,29 +491,38 @@ async fn source(
     } else {
         !client
             .scene_items()
-            .enabled(SceneId::Name(&params.scene_name), item_id)
+            .get_scene_item_enabled(
+                &GetSceneItemEnabled::new(item_id).scene_name(&params.scene_name),
+            )
             .await
             .map_err(text)?
+            .scene_item_enabled
     };
     client
         .scene_items()
-        .set_enabled(SetItemEnabled {
-            scene: SceneId::Name(&params.scene_name),
-            item_id,
-            enabled,
-        })
+        .set_scene_item_enabled(
+            &SetSceneItemEnabled::new(item_id, enabled).scene_name(&params.scene_name),
+        )
         .await
         .map_err(text)?;
     Ok(flag(enabled))
 }
 
 async fn mute(client: &Client, params: &ActionParams, press: PressKind) -> ObsResult<SegmentState> {
-    let input = InputId::Name(&params.input_name);
     if press == PressKind::Long {
-        client.inputs().set_muted(input, true).await.map_err(text)?;
+        client
+            .inputs()
+            .set_input_mute(&SetInputMute::new(true).input_name(&params.input_name))
+            .await
+            .map_err(text)?;
         return Ok(SegmentState::Active);
     }
-    let muted = client.inputs().toggle_mute(input).await.map_err(text)?;
+    let muted = client
+        .inputs()
+        .toggle_input_mute(&ToggleInputMute::new().input_name(&params.input_name))
+        .await
+        .map_err(text)?
+        .input_muted;
     Ok(flag(muted))
 }
 
@@ -469,20 +531,20 @@ async fn filter(
     params: &ActionParams,
     press: PressKind,
 ) -> ObsResult<SegmentState> {
-    let source = SourceId::Name(&params.source_name);
     let current = client
         .filters()
-        .get(source, &params.filter_name)
+        .get_source_filter(
+            &GetSourceFilter::new(&params.filter_name).source_name(&params.source_name),
+        )
         .await
         .map_err(text)?;
-    let enabled = press != PressKind::Long && !current.enabled;
+    let enabled = press != PressKind::Long && !current.filter_enabled;
     client
         .filters()
-        .set_enabled(SetFilterEnabled {
-            source,
-            filter: &params.filter_name,
-            enabled,
-        })
+        .set_source_filter_enabled(
+            &SetSourceFilterEnabled::new(&params.filter_name, enabled)
+                .source_name(&params.source_name),
+        )
         .await
         .map_err(text)?;
     Ok(flag(enabled))
@@ -490,8 +552,8 @@ async fn filter(
 
 async fn collection(client: &Client, params: &ActionParams) -> ObsResult<SegmentState> {
     client
-        .scene_collections()
-        .set_current(&params.collection_name)
+        .config()
+        .set_current_scene_collection(&SetCurrentSceneCollection::new(&params.collection_name))
         .await
         .map_err(text)?;
     Ok(SegmentState::Active)
@@ -499,8 +561,8 @@ async fn collection(client: &Client, params: &ActionParams) -> ObsResult<Segment
 
 async fn profile(client: &Client, params: &ActionParams) -> ObsResult<SegmentState> {
     client
-        .profiles()
-        .set_current(&params.profile_name)
+        .config()
+        .set_current_profile(&SetCurrentProfile::new(&params.profile_name))
         .await
         .map_err(text)?;
     Ok(SegmentState::Active)
@@ -512,14 +574,11 @@ async fn screenshot(client: &Client, params: &ActionParams) -> ObsResult<Segment
     }
     client
         .sources()
-        .save_screenshot(SaveScreenshot {
-            source: SourceId::Name(&params.source_name),
-            format: &params.format,
-            width: None,
-            height: None,
-            compression_quality: Some(-1),
-            file_path: Path::new(&params.file_path),
-        })
+        .save_source_screenshot(
+            &SaveSourceScreenshot::new(&params.format, &params.file_path)
+                .source_name(&params.source_name)
+                .image_compression_quality(-1),
+        )
         .await
         .map_err(text)?;
     Ok(SegmentState::Neutral)
@@ -528,21 +587,22 @@ async fn screenshot(client: &Client, params: &ActionParams) -> ObsResult<Segment
 async fn hotkey(client: &Client, params: &ActionParams) -> ObsResult<SegmentState> {
     if !params.hotkey_name.trim().is_empty() {
         client
-            .hotkeys()
-            .trigger_by_name(&params.hotkey_name, None)
+            .general()
+            .trigger_hotkey_by_name(&TriggerHotkeyByName::new(&params.hotkey_name))
             .await
             .map_err(text)?;
     } else if !params.key_id.trim().is_empty() {
         client
-            .hotkeys()
-            .trigger_by_sequence(
-                &params.key_id,
-                KeyModifiers {
-                    shift: params.shift,
-                    control: params.control,
-                    alt: params.alt,
-                    command: params.command,
-                },
+            .general()
+            .trigger_hotkey_by_key_sequence(
+                &TriggerHotkeyByKeySequence::new(
+                    KeyModifiers::new()
+                        .shift(params.shift)
+                        .control(params.control)
+                        .alt(params.alt)
+                        .command(params.command),
+                )
+                .key_id(&params.key_id),
             )
             .await
             .map_err(text)?;
@@ -553,29 +613,31 @@ async fn hotkey(client: &Client, params: &ActionParams) -> ObsResult<SegmentStat
 }
 
 async fn media(client: &Client, params: &ActionParams) -> ObsResult<SegmentState> {
-    let input = InputId::Name(&params.input_name);
     let action = match params.media_action.as_str() {
-        "play" => MediaAction::Play,
-        "pause" => MediaAction::Pause,
-        "stop" => MediaAction::Stop,
-        "restart" => MediaAction::Restart,
-        "next" => MediaAction::Next,
-        "previous" => MediaAction::Previous,
+        "play" => ObsMediaInputAction::MediaInputActionPlay,
+        "pause" => ObsMediaInputAction::MediaInputActionPause,
+        "stop" => ObsMediaInputAction::MediaInputActionStop,
+        "restart" => ObsMediaInputAction::MediaInputActionRestart,
+        "next" => ObsMediaInputAction::MediaInputActionNext,
+        "previous" => ObsMediaInputAction::MediaInputActionPrevious,
         _ => {
-            let status = client.media_inputs().status(input).await.map_err(text)?;
-            if matches!(
-                status.state,
-                obws::responses::media_inputs::MediaState::Playing
-            ) {
-                MediaAction::Pause
+            let status = client
+                .media_inputs()
+                .get_media_input_status(&GetMediaInputStatus::new().input_name(&params.input_name))
+                .await
+                .map_err(text)?;
+            if status.media_state == MEDIA_PLAYING {
+                ObsMediaInputAction::MediaInputActionPause
             } else {
-                MediaAction::Play
+                ObsMediaInputAction::MediaInputActionPlay
             }
         }
     };
     client
         .media_inputs()
-        .trigger_action(input, action)
+        .trigger_media_input_action(
+            &TriggerMediaInputAction::new(action.as_str()).input_name(&params.input_name),
+        )
         .await
         .map_err(text)?;
     fetch_state(ActionKind::Media, client, params, SceneOutput::Program).await
@@ -592,7 +654,7 @@ async fn raw_request(
     let data = parse_json_object(&params.request_data)?;
     pool.raw_request(instance_id, &params.request_type, data)
         .await
-        .map_err(raw_text)?;
+        .map_err(|error| raw_text(&params.request_type, error))?;
     Ok(SegmentState::Neutral)
 }
 
@@ -606,29 +668,30 @@ async fn raw_batch(
         .as_array()
         .ok_or_else(|| "batch requests must be a JSON array".to_string())?
         .iter()
-        .map(|entry| RawCall {
-            request_type: entry
-                .get("requestType")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            request_data: entry
-                .get("requestData")
-                .cloned()
-                .unwrap_or_else(|| json!({})),
+        .map(|entry| {
+            RawCall::new(
+                entry
+                    .get("requestType")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                entry
+                    .get("requestData")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            )
         })
         .filter(|call| !call.request_type.is_empty())
         .collect::<Vec<_>>();
     pool.raw_batch(instance_id, &calls, params.halt_on_failure)
         .await
-        .map_err(raw_text)?;
+        .map_err(|error| raw_text("batch", error))?;
     Ok(SegmentState::Neutral)
 }
 
 async fn press_button(client: &Client, input: &str, property: &str) -> ObsResult<()> {
     client
         .inputs()
-        .press_properties_button(InputId::Name(input), property)
+        .press_input_properties_button(&PressInputPropertiesButton::new(property).input_name(input))
         .await
         .map_err(text)
 }
@@ -636,13 +699,14 @@ async fn press_button(client: &Client, input: &str, property: &str) -> ObsResult
 async fn find_item(client: &Client, scene: &str, source: &str) -> ObsResult<Option<i64>> {
     let items = client
         .scene_items()
-        .list(SceneId::Name(scene))
+        .get_scene_item_list(&GetSceneItemList::new().scene_name(scene))
         .await
         .map_err(text)?;
     Ok(items
+        .scene_items
         .into_iter()
         .find(|item| item.source_name == source)
-        .map(|item| item.id))
+        .map(|item| item.scene_item_id))
 }
 
 pub async fn catalog(
@@ -653,38 +717,54 @@ pub async fn catalog(
     let names = match resource {
         "scenes" => client
             .scenes()
-            .list()
+            .get_scene_list(&GetSceneList::new())
             .await
             .map_err(text)?
             .scenes
             .into_iter()
-            .map(|scene| scene.id.name)
+            .map(|scene| scene.scene_name)
             .collect(),
         "inputs" => client
             .inputs()
-            .list(None)
+            .get_input_list(&GetInputList::new())
             .await
             .map_err(text)?
+            .inputs
             .into_iter()
-            .map(|input| input.id.name)
+            .map(|input| input.input_name)
             .collect(),
         "collections" => {
             client
-                .scene_collections()
-                .list()
+                .config()
+                .get_scene_collection_list()
                 .await
                 .map_err(text)?
-                .collections
+                .scene_collections
         }
-        "profiles" => client.profiles().list().await.map_err(text)?.profiles,
-        "hotkeys" => client.hotkeys().list().await.map_err(text)?,
+        "profiles" => {
+            client
+                .config()
+                .get_profile_list()
+                .await
+                .map_err(text)?
+                .profiles
+        }
+        "hotkeys" => {
+            client
+                .general()
+                .get_hotkey_list()
+                .await
+                .map_err(text)?
+                .hotkeys
+        }
         "filters" => client
             .filters()
-            .list(SourceId::Name(&params.source_name))
+            .get_source_filter_list(&GetSourceFilterList::new().source_name(&params.source_name))
             .await
             .map_err(text)?
+            .filters
             .into_iter()
-            .map(|filter| filter.name)
+            .map(|filter| filter.filter_name)
             .collect(),
         _ => Vec::new(),
     };
@@ -733,17 +813,16 @@ fn parse_json(text: &str) -> ObsResult<Value> {
     serde_json::from_str(trimmed).map_err(|error| format!("invalid JSON: {error}"))
 }
 
-fn text(error: obws::error::Error) -> String {
+fn text(error: obs_websocket::Error) -> String {
     error.to_string()
 }
 
-fn raw_text(error: obs_pool::CallError) -> String {
+fn raw_text(request_type: &str, error: obs_pool::CallError) -> String {
     match error {
-        obs_pool::CallError::Raw(RawError::Request {
-            request_type,
-            code,
-            comment,
-        }) => format!("{request_type} failed ({code}): {comment}"),
+        obs_pool::CallError::Obs(obs_websocket::Error::Request { code, comment }) => {
+            let comment = comment.unwrap_or_else(|| "request failed".into());
+            format!("{request_type} failed ({code}): {comment}")
+        }
         other => other.to_string(),
     }
 }

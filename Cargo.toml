@@ -12,7 +12,8 @@ license = "Apache-2.0"
 async-trait = "0.1"
 base64 = "0.22"
 futures-util = "0.3"
-obws = { version = "0.15", features = ["events"] }
+obs-websocket = { git = "https://github.com/MikanseiLaboratory/obs-websocket-rs", rev = "8fe8125ffa23e67c76741c3bfdb74b52a3a7e907", default-features = false }
+obs-websocket-core = { git = "https://github.com/MikanseiLaboratory/obs-websocket-rs", rev = "8fe8125ffa23e67c76741c3bfdb74b52a3a7e907" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

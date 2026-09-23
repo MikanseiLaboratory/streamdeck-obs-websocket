@@ -12,7 +12,8 @@ mock = []
 [dependencies]
 base64.workspace = true
 futures-util.workspace = true
-obws.workspace = true
+obs-websocket.workspace = true
+obs-websocket-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

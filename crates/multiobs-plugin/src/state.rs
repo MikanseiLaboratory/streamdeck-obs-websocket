@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::join_all;
-use obws::events::Event;
+use obs_websocket::Event;
 use serde_json::{json, Value};
 use streamdeck_plugin::{async_trait, CommandSender, PluginLifecycle, Result, Target};
 use tokio::sync::{Mutex, Notify};

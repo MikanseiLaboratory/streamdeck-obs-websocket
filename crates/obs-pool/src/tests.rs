@@ -96,8 +96,8 @@ async fn connects_toggles_and_receives_events() {
     wait_connected(&pool, "main").await;
 
     let client = pool.client("main").await.expect("client");
-    let active = client.streaming().toggle().await.expect("toggle");
-    assert!(active);
+    let active = client.stream().toggle_stream().await.expect("toggle");
+    assert!(active.output_active);
 
     server.push_event(
         "StreamStateChanged",
@@ -116,7 +116,7 @@ async fn connects_toggles_and_receives_events() {
     .expect("event");
     assert!(matches!(
         event,
-        obws::events::Event::StreamStateChanged { active: true, .. }
+        obs_websocket::Event::StreamStateChanged(event) if event.output_active
     ));
 
     let listed = pool
@@ -126,20 +126,14 @@ async fn connects_toggles_and_receives_events() {
     assert_eq!(listed["currentProgramSceneName"], "Live");
 
     let batch = pool
-        .raw_batch(
-            "main",
-            &[RawCall {
-                request_type: "GetVersion".into(),
-                request_data: json!({}),
-            }],
-            false,
-        )
+        .raw_batch("main", &[RawCall::new("GetVersion", json!({}))], false)
         .await
         .expect("batch");
-    assert_eq!(
-        batch["results"][0]["responseData"]["obsStudioVersion"],
-        "31.0.0"
-    );
+    let data = batch
+        .first()
+        .and_then(|item| item.result.as_ref().ok())
+        .expect("batch item");
+    assert_eq!(data["obsVersion"], "31.0.0");
 }
 
 #[tokio::test]
