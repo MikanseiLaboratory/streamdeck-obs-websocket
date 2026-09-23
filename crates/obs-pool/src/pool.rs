@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use obws::client::{Client, ConnectConfig};
-use obws::error::Error as ObsError;
+use obs_websocket::{
+    BatchItemResult, Client, ConnectConfig, ConnectionState, Error as ObsError, RawCall,
+    ReconnectPolicy,
+};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::{broadcast, Mutex, Notify, RwLock};
@@ -12,7 +15,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{ObsInstanceConfig, TargetGroup};
-use crate::raw::{RawCall, RawError, RawSession};
 use crate::status::{ConnectionStatus, InstanceStatus};
 
 /// Tunables for connection and retry behaviour.
@@ -50,7 +52,7 @@ pub enum PoolEvent {
     Status(InstanceStatus),
     Obs {
         id: String,
-        event: obws::events::Event,
+        event: obs_websocket::Event,
     },
 }
 
@@ -62,8 +64,6 @@ pub enum CallError {
     Unavailable { id: String, status: String },
     #[error(transparent)]
     Obs(#[from] ObsError),
-    #[error(transparent)]
-    Raw(#[from] RawError),
 }
 
 struct Slot {
@@ -80,7 +80,6 @@ struct Inner {
     slots: Mutex<HashMap<String, Slot>>,
     clients: Mutex<HashMap<String, Arc<Client>>>,
     statuses: Mutex<HashMap<String, ConnectionStatus>>,
-    raw: Mutex<HashMap<String, RawSession>>,
     events: broadcast::Sender<PoolEvent>,
     changed: Notify,
     next_generation: Mutex<u64>,
@@ -103,7 +102,6 @@ impl ObsPool {
                 slots: Mutex::new(HashMap::new()),
                 clients: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
-                raw: Mutex::new(HashMap::new()),
                 events,
                 changed: Notify::new(),
                 next_generation: Mutex::new(1),
@@ -140,7 +138,6 @@ impl ObsPool {
             }
             self.inner.clients.lock().await.remove(&id);
             self.inner.statuses.lock().await.remove(&id);
-            self.inner.raw.lock().await.remove(&id);
         }
 
         for id in ids {
@@ -160,7 +157,6 @@ impl ObsPool {
                 slot.task.abort();
             }
             self.inner.clients.lock().await.remove(&id);
-            self.inner.raw.lock().await.remove(&id);
             let generation = {
                 let mut next = self.inner.next_generation.lock().await;
                 let generation = *next;
@@ -196,7 +192,6 @@ impl ObsPool {
             slot.token.cancel();
         }
         self.inner.clients.lock().await.remove(id);
-        self.inner.raw.lock().await.remove(id);
         // Clearing the endpoint forces reconcile to spawn a fresh supervisor.
         if let Some(slot) = self.inner.slots.lock().await.get_mut(id) {
             slot.endpoint.clear();
@@ -273,20 +268,8 @@ impl ObsPool {
         request_type: &str,
         request_data: Value,
     ) -> Result<Value, CallError> {
-        let mut session = self.raw_session(id).await?;
-        match session.request(request_type, request_data.clone()).await {
-            Ok(value) => {
-                self.inner.raw.lock().await.insert(id.to_string(), session);
-                Ok(value)
-            }
-            Err(_) => {
-                self.inner.raw.lock().await.remove(id);
-                let mut session = self.raw_session(id).await?;
-                let value = session.request(request_type, request_data).await?;
-                self.inner.raw.lock().await.insert(id.to_string(), session);
-                Ok(value)
-            }
-        }
+        let client = self.client(id).await?;
+        Ok(client.raw_request(request_type, request_data).await?)
     }
 
     pub async fn raw_batch(
@@ -294,38 +277,13 @@ impl ObsPool {
         id: &str,
         requests: &[RawCall],
         halt_on_failure: bool,
-    ) -> Result<Value, CallError> {
-        let mut session = self.raw_session(id).await?;
-        match session.batch(requests, halt_on_failure).await {
-            Ok(value) => {
-                self.inner.raw.lock().await.insert(id.to_string(), session);
-                Ok(value)
-            }
-            Err(_) => {
-                self.inner.raw.lock().await.remove(id);
-                let mut session = self.raw_session(id).await?;
-                let value = session.batch(requests, halt_on_failure).await?;
-                self.inner.raw.lock().await.insert(id.to_string(), session);
-                Ok(value)
-            }
+    ) -> Result<Vec<BatchItemResult>, CallError> {
+        let client = self.client(id).await?;
+        let mut batch = client.batch();
+        for call in requests {
+            batch = batch.add_raw(call.clone());
         }
-    }
-
-    async fn raw_session(&self, id: &str) -> Result<RawSession, CallError> {
-        if let Some(session) = self.inner.raw.lock().await.remove(id) {
-            return Ok(session);
-        }
-        let config = self
-            .config(id)
-            .await
-            .ok_or_else(|| CallError::Unknown(id.to_string()))?;
-        if !config.enabled {
-            return Err(CallError::Unavailable {
-                id: id.to_string(),
-                status: "disabled".into(),
-            });
-        }
-        Ok(RawSession::connect(&config.host, config.port, config.password_opt()).await?)
+        Ok(batch.halt_on_failure(halt_on_failure).send().await?)
     }
 
     async fn generation_current(&self, id: &str, generation: u64) -> bool {
@@ -391,16 +349,24 @@ async fn supervise(pool: ObsPool, id: String, generation: u64, token: Cancellati
             .await;
         match connect_client(&config, pool.inner.options.connect_timeout).await {
             Ok(client) => {
-                let version = client.general().version().await.ok();
+                let version = client.general().get_version().await.ok();
                 let client = Arc::new(client);
-                let mut events = match client.events() {
-                    Ok(events) => events,
-                    Err(error) => {
-                        pool.publish_status(&id, generation, classify_error(&error))
-                            .await;
-                        continue;
+                let disconnect = Arc::new(Notify::new());
+                let disconnected = Arc::new(AtomicBool::new(false));
+                let notify_disconnect = Arc::clone(&disconnect);
+                let mark_disconnected = Arc::clone(&disconnected);
+                // `events()` stays open after the socket drops, so watch the lifecycle instead.
+                let _subscription = client.on_connection_state(move |state| {
+                    if matches!(state, ConnectionState::Closed { .. }) {
+                        mark_disconnected.store(true, Ordering::Release);
+                        notify_disconnect.notify_waiters();
                     }
-                };
+                });
+                if matches!(client.connection_state(), ConnectionState::Closed { .. }) {
+                    disconnected.store(true, Ordering::Release);
+                }
+                let events = client.events();
+                tokio::pin!(events);
                 pool.store_client(&id, generation, Arc::clone(&client))
                     .await;
                 pool.publish_status(
@@ -409,16 +375,20 @@ async fn supervise(pool: ObsPool, id: String, generation: u64, token: Cancellati
                     ConnectionStatus::Connected {
                         obs_version: version
                             .as_ref()
-                            .map(|value| value.obs_studio_version.to_string())
+                            .map(|value| value.obs_version.clone())
                             .unwrap_or_else(|| "unknown".into()),
                         websocket_version: version
-                            .map(|value| value.obs_web_socket_version.to_string())
+                            .map(|value| value.obs_web_socket_version)
                             .unwrap_or_else(|| "unknown".into()),
                     },
                 )
                 .await;
                 backoff = pool.inner.options.initial_backoff;
                 loop {
+                    let closed = disconnect.notified();
+                    if disconnected.load(Ordering::Acquire) {
+                        break;
+                    }
                     tokio::select! {
                         _ = token.cancelled() => {
                             pool.clear_client(&id, generation).await;
@@ -430,6 +400,7 @@ async fn supervise(pool: ObsPool, id: String, generation: u64, token: Cancellati
                                 break;
                             }
                         }
+                        _ = closed => break,
                         event = events.next() => {
                             match event {
                                 Some(event) => {
@@ -471,34 +442,19 @@ async fn connect_client(
     config: &ObsInstanceConfig,
     connect_timeout: Duration,
 ) -> Result<Client, ObsError> {
-    Client::connect_with_config(ConnectConfig {
-        host: config.host.trim(),
-        port: config.port,
-        password: config.password_opt(),
-        event_subscriptions: None,
-        broadcast_capacity: 256,
-        connect_timeout,
-        dangerous: None,
-    })
+    Client::connect(
+        ConnectConfig::new(config.host.trim(), config.port)
+            .password(config.password_opt())
+            .connect_timeout(connect_timeout)
+            .reconnect(ReconnectPolicy::disabled()),
+    )
     .await
 }
 
 fn classify_error(error: &ObsError) -> ConnectionStatus {
-    let message = error_chain(error);
-    let lower = message.to_lowercase();
-    if lower.contains("4009") || lower.contains("auth") {
-        ConnectionStatus::AuthFailed { message }
-    } else {
-        ConnectionStatus::Unreachable { message }
+    let message = error.to_string();
+    match error {
+        ObsError::AuthFailed => ConnectionStatus::AuthFailed { message },
+        _ => ConnectionStatus::Unreachable { message },
     }
-}
-
-fn error_chain(error: &ObsError) -> String {
-    let mut parts = vec![error.to_string()];
-    let mut source = std::error::Error::source(error);
-    while let Some(inner) = source {
-        parts.push(inner.to_string());
-        source = inner.source();
-    }
-    parts.join(": ")
 }

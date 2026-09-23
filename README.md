@@ -35,8 +35,8 @@ Passwords are stored in Stream Deck global settings.
 ## Layout
 
 - `streamdeck-plugin` 0.1 talks to Stream Deck.
-- `obws` 0.15 is the typed OBS WebSocket v5 client.
-- Raw Request and Raw Batch use a separate socket (op 6 and op 8). `obws` does not expose raw requests.
+- `obs-websocket` (git rev `8fe8125ffa23e67c76741c3bfdb74b52a3a7e907`) is the typed OBS WebSocket v5 client.
+- Typed requests, Raw Request, and Raw Batch share one session.
 
 ## License
 

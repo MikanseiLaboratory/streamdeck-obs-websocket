@@ -1,7 +1,7 @@
 //! In-process OBS WebSocket v5 server for tests.
 //!
-//! Speaks just enough of the protocol for `obws` to identify, call `GetVersion`,
-//! and for the raw client to send requests and batches.
+//! Speaks just enough of the protocol to identify, call `GetVersion`,
+//! and to record typed requests, raw requests, and batches.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -10,9 +10,14 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, Mutex};
+use tokio_tungstenite::accept_hdr_async;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
+
+const SUBPROTOCOL: &str = "obswebsocket.json";
 
 use crate::auth::authentication_string;
 
@@ -126,7 +131,7 @@ async fn handle(
     drops: &mut broadcast::Receiver<()>,
     scenes: Arc<Mutex<MockScenes>>,
 ) -> Result<(), String> {
-    let stream = tokio_tungstenite::accept_async(stream)
+    let stream = accept_hdr_async(stream, select_subprotocol)
         .await
         .map_err(|error| error.to_string())?;
     let (mut write, mut read) = stream.split();
@@ -273,10 +278,10 @@ async fn response_data(
         "GetVersion" => (
             true,
             json!({
-                "obsStudioVersion": "31.0.0",
+                "obsVersion": "31.0.0",
                 "obsWebSocketVersion": "5.5.4",
                 "rpcVersion": 1,
-                "availableRequests": ["GetVersion"],
+                "availableRequests": [],
                 "supportedImageFormats": ["png"],
                 "platform": "macos",
                 "platformDescription": "mock"
@@ -318,7 +323,7 @@ async fn response_data(
             if scenes.fail_program {
                 (false, json!({}))
             } else {
-                (true, scene_body(&scenes.program))
+                (true, program_scene_body(&scenes.program))
             }
         }
         "SetCurrentProgramScene" => {
@@ -333,7 +338,7 @@ async fn response_data(
         "GetCurrentPreviewScene" => {
             let scenes = scenes.lock().await;
             match &scenes.preview {
-                Some(name) => (true, scene_body(name)),
+                Some(name) => (true, preview_scene_body(name)),
                 None => (false, json!({})),
             }
         }
@@ -350,11 +355,41 @@ async fn response_data(
     }
 }
 
-fn scene_body(name: &str) -> Value {
+fn program_scene_body(name: &str) -> Value {
     json!({
         "sceneName": name,
-        "sceneUuid": "11111111-1111-1111-1111-111111111111"
+        "sceneUuid": "11111111-1111-1111-1111-111111111111",
+        "currentProgramSceneName": name,
+        "currentProgramSceneUuid": "11111111-1111-1111-1111-111111111111"
     })
+}
+
+fn preview_scene_body(name: &str) -> Value {
+    json!({
+        "sceneName": name,
+        "sceneUuid": "22222222-2222-2222-2222-222222222222",
+        "currentPreviewSceneName": name,
+        "currentPreviewSceneUuid": "22222222-2222-2222-2222-222222222222"
+    })
+}
+
+#[allow(clippy::result_large_err)]
+fn select_subprotocol(
+    request: &Request,
+    mut response: Response,
+) -> Result<Response, tokio_tungstenite::tungstenite::handshake::server::ErrorResponse> {
+    let offered = request
+        .headers()
+        .get("Sec-WebSocket-Protocol")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|part| part.trim() == SUBPROTOCOL));
+    if offered {
+        response.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            HeaderValue::from_static(SUBPROTOCOL),
+        );
+    }
+    Ok(response)
 }
 
 async fn next_json(
