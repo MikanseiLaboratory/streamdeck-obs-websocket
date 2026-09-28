@@ -403,6 +403,195 @@
           "Image": "images/icon"
         }
       ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.splitrecord",
+      "Name": "Split Recording",
+      "Icon": "images/icon",
+      "Tooltip": "Split the current recording file.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.transition",
+      "Name": "Transition",
+      "Icon": "images/icon",
+      "Tooltip": "Select the current scene transition.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.projector",
+      "Name": "Projector",
+      "Icon": "images/icon",
+      "Tooltip": "Open a projector on the OBS machine.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.output",
+      "Name": "Output",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle an output. Long press stops it.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.monitor",
+      "Name": "Audio Monitoring",
+      "Icon": "images/icon",
+      "Tooltip": "Toggle audio monitoring. Long press turns it off.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "images/icon"
+        },
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.tbar",
+      "Name": "T-Bar",
+      "Icon": "images/icon",
+      "Tooltip": "Move the studio T-Bar. Press to transition.",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Encoder": {
+        "layout": "$B1"
+      },
+      "TriggerDescription": {
+        "Rotate": "Move the T-Bar",
+        "Push": "Trigger the studio transition",
+        "Touch": "Trigger the studio transition"
+      },
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.transitionduration",
+      "Name": "Transition Duration",
+      "Icon": "images/icon",
+      "Tooltip": "Adjust transition duration. Press to transition.",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Encoder": {
+        "layout": "$B1"
+      },
+      "TriggerDescription": {
+        "Rotate": "Change duration",
+        "Push": "Trigger the studio transition",
+        "Touch": "Trigger the studio transition"
+      },
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.mediajog",
+      "Name": "Media Jog",
+      "Icon": "images/icon",
+      "Tooltip": "Seek a media source. Press to play or pause.",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Encoder": {
+        "layout": "$B1"
+      },
+      "TriggerDescription": {
+        "Rotate": "Seek",
+        "Push": "Play or pause",
+        "Touch": "Play or pause"
+      },
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.balance",
+      "Name": "Audio Balance",
+      "Icon": "images/icon",
+      "Tooltip": "Adjust input balance. Press to center.",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Encoder": {
+        "layout": "$B1"
+      },
+      "TriggerDescription": {
+        "Rotate": "Pan left or right",
+        "Push": "Reset to center",
+        "Touch": "Reset to center"
+      },
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
+    },
+    {
+      "UUID": "dev.mikanseilaboratory.obs.websocket.syncoffset",
+      "Name": "Audio Sync Offset",
+      "Icon": "images/icon",
+      "Tooltip": "Adjust audio sync offset. Press to reset.",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Encoder": {
+        "layout": "$B1"
+      },
+      "TriggerDescription": {
+        "Rotate": "Change offset",
+        "Push": "Reset to 0 ms",
+        "Touch": "Reset to 0 ms"
+      },
+      "States": [
+        {
+          "Image": "images/icon"
+        }
+      ]
     }
   ]
 }

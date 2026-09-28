@@ -116,7 +116,7 @@ export function Configuration() {
                   id: crypto.randomUUID(),
                   name: `OBS ${instances.length + 1}`,
                   host: "127.0.0.1",
-                  port: 4455 + instances.length,
+                  port: 4455,
                   password: "",
                   color: PALETTE[instances.length % PALETTE.length],
                   enabled: true

@@ -24,6 +24,16 @@ pub enum ActionKind {
     Volume,
     Raw,
     RawBatch,
+    SplitRecord,
+    Transition,
+    Projector,
+    Output,
+    Monitor,
+    Tbar,
+    TransitionDuration,
+    MediaJog,
+    Balance,
+    SyncOffset,
 }
 
 impl ActionKind {
@@ -41,6 +51,13 @@ impl ActionKind {
                 | Self::Volume
                 | Self::Raw
                 | Self::RawBatch
+                | Self::SplitRecord
+                | Self::Projector
+                | Self::Tbar
+                | Self::TransitionDuration
+                | Self::MediaJog
+                | Self::Balance
+                | Self::SyncOffset
         )
     }
 
@@ -56,7 +73,13 @@ impl ActionKind {
                 | Self::Chapter
                 | Self::Raw
                 | Self::RawBatch
+                | Self::SplitRecord
+                | Self::Projector
         )
+    }
+
+    pub fn polls(self) -> bool {
+        matches!(self, Self::Stats | Self::Output | Self::MediaJog)
     }
 }
 

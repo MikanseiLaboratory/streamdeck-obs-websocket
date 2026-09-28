@@ -39,7 +39,14 @@ const emptyParams = (): ActionParams => ({
   requestType: "",
   requestData: "{}",
   batchRequests: "[]",
-  haltOnFailure: false
+  haltOnFailure: false,
+  transitionName: "",
+  transitionDurationMs: 0,
+  projectorType: "program",
+  monitorIndex: -1,
+  outputName: "",
+  monitorType: "monitorAndOutput",
+  dialStep: 0
 });
 
 const actionDefaults: ActionSettings = {
@@ -74,7 +81,16 @@ const KIND_FIELDS: Record<string, Array<keyof ActionParams>> = {
   stats: ["stat"],
   volume: ["inputName", "stepDb"],
   raw: ["requestType", "requestData"],
-  rawbatch: ["batchRequests", "haltOnFailure"]
+  rawbatch: ["batchRequests", "haltOnFailure"],
+  transition: ["transitionName", "transitionDurationMs"],
+  projector: ["projectorType", "sourceName", "monitorIndex"],
+  output: ["outputName"],
+  monitor: ["inputName", "monitorType"],
+  tbar: ["dialStep"],
+  transitionduration: ["dialStep"],
+  mediajog: ["inputName", "dialStep"],
+  balance: ["inputName", "dialStep"],
+  syncoffset: ["inputName", "dialStep"]
 };
 
 const CATALOG: Record<string, string> = {
@@ -89,7 +105,13 @@ const CATALOG: Record<string, string> = {
   refreshbrowser: "inputs",
   refreshcapture: "inputs",
   media: "inputs",
-  volume: "inputs"
+  volume: "inputs",
+  transition: "transitions",
+  output: "outputs",
+  monitor: "inputs",
+  mediajog: "inputs",
+  balance: "inputs",
+  syncoffset: "inputs"
 };
 
 const CONFIG_WINDOW = "obs-websocket-config";
@@ -468,18 +490,20 @@ function ParamFields({
         ))}
       </datalist>
       {fields.map((field) => (
-        <Field key={field} field={field} params={params} listId={listId} onChange={onChange} />
+        <Field key={field} kind={kind} field={field} params={params} listId={listId} onChange={onChange} />
       ))}
     </>
   );
 }
 
 function Field({
+  kind,
   field,
   params,
   listId,
   onChange
 }: {
+  kind: string;
   field: keyof ActionParams;
   params: ActionParams;
   listId: string;
@@ -490,7 +514,7 @@ function Field({
     const id = `field-${field}`;
     return (
       <div type="checkbox" className="sdpi-item">
-        <div className="sdpi-item-label">{label(field)}</div>
+        <div className="sdpi-item-label">{label(field, kind)}</div>
         <input
           id={id}
           className="sdpi-item-value"
@@ -500,36 +524,52 @@ function Field({
         />
         <label htmlFor={id}>
           <span></span>
-          {label(field)}
+          {label(field, kind)}
         </label>
       </div>
     );
   }
-  if (field === "mediaAction" || field === "stat" || field === "format") {
+  if (field === "mediaAction" || field === "stat" || field === "format" || field === "projectorType" || field === "monitorType") {
     const options =
       field === "stat"
         ? ["fps", "cpu", "memory", "dropped"]
         : field === "format"
           ? ["png", "jpg", "webp"]
-          : ["toggle", "play", "pause", "stop", "restart", "next", "previous"];
+          : field === "projectorType"
+            ? [
+                { value: "program", label: "Program" },
+                { value: "preview", label: "Preview" },
+                { value: "multiview", label: "Multiview" },
+                { value: "source", label: "Source" }
+              ]
+            : field === "monitorType"
+              ? [
+                  { value: "monitorAndOutput", label: "Monitor and output" },
+                  { value: "monitorOnly", label: "Monitor only" }
+                ]
+              : ["toggle", "play", "pause", "stop", "restart", "next", "previous"].map((option) => ({
+                  value: option,
+                  label: option
+                }));
+    const choices = options.map((option) => (typeof option === "string" ? { value: option, label: option } : option));
     return (
       <div type="select" className="sdpi-item">
-        <div className="sdpi-item-label">{label(field)}</div>
+        <div className="sdpi-item-label">{label(field, kind)}</div>
         <select className="sdpi-item-value select" value={String(value)} onChange={(event) => onChange({ ...params, [field]: event.target.value })}>
-          {options.map((option) => (
-            <option key={option} value={option}>
-              {option}
+          {choices.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
       </div>
     );
   }
-  const numeric = field === "stepDb";
+  const numeric = field === "stepDb" || field === "dialStep" || field === "monitorIndex" || field === "transitionDurationMs";
   const wide = field === "requestData" || field === "batchRequests";
   return (
     <div className="sdpi-item">
-      <div className="sdpi-item-label">{label(field)}</div>
+      <div className="sdpi-item-label">{label(field, kind)}</div>
       {wide ? (
         <textarea
           className="sdpi-item-value"
@@ -592,7 +632,12 @@ function statusColor(kind: string | undefined, fallback: string) {
   }
 }
 
-function label(field: keyof ActionParams) {
+function label(field: keyof ActionParams, kind = "") {
+  if (field === "dialStep") {
+    if (kind === "tbar" || kind === "balance") return "Step (%)";
+    if (kind === "mediajog") return "Step (s)";
+    return "Step (ms)";
+  }
   const names: Partial<Record<keyof ActionParams, string>> = {
     sceneName: "Scene",
     sourceName: "Source",
@@ -609,7 +654,13 @@ function label(field: keyof ActionParams) {
     requestType: "Request",
     requestData: "Data",
     batchRequests: "Batch",
-    haltOnFailure: "Halt"
+    haltOnFailure: "Halt",
+    transitionName: "Transition",
+    transitionDurationMs: "Duration (ms)",
+    projectorType: "Type",
+    monitorIndex: "Monitor",
+    outputName: "Output",
+    monitorType: "Monitor"
   };
   return names[field] ?? field;
 }

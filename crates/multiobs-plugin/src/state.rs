@@ -25,6 +25,7 @@ struct LiveKey {
     settings: ActionSettings,
     segments: HashMap<String, SegmentState>,
     titles: HashMap<String, String>,
+    tbar_positions: HashMap<String, f64>,
     title: String,
     multi: bool,
 }
@@ -110,7 +111,9 @@ impl AppState {
     ) {
         let mut keys = self.runtime.keys.lock().await;
         let previous = keys.remove(context);
-        let segments = previous.map(|key| key.segments).unwrap_or_default();
+        let (segments, tbar_positions) = previous
+            .map(|key| (key.segments, key.tbar_positions))
+            .unwrap_or_default();
         keys.insert(
             context.to_string(),
             LiveKey {
@@ -118,6 +121,7 @@ impl AppState {
                 settings,
                 segments,
                 titles: HashMap::new(),
+                tbar_positions,
                 title: String::new(),
                 multi,
             },
@@ -199,13 +203,26 @@ impl AppState {
                 return;
             };
             let targets = state.targets_for(&snapshot.settings).await;
-            for id in targets {
-                let params = snapshot.settings.params_for(&id).clone();
-                let Ok(client) = state.pool.client(&id).await else {
+            let mut titles = HashMap::new();
+            for id in &targets {
+                let params = snapshot.settings.params_for(id).clone();
+                let Ok(client) = state.pool.client(id).await else {
                     continue;
                 };
-                if let Err(error) = ops::toggle_mute(&client, &params).await {
-                    tracing::warn!(%error, "dial mute failed");
+                match ops::dial_press(snapshot.kind, &client, &params).await {
+                    Ok(Some(title)) => {
+                        titles.insert(id.clone(), title);
+                    }
+                    Ok(None) => {}
+                    Err(error) => tracing::warn!(%error, "dial press failed"),
+                }
+            }
+            if !titles.is_empty() {
+                if let Some(key) = state.runtime.keys.lock().await.get_mut(&context) {
+                    for (id, title) in titles {
+                        key.titles.insert(id, title);
+                    }
+                    key.title = join_titles(&targets, &key.titles);
                 }
             }
             state.refresh_key(&context).await;
@@ -307,17 +324,28 @@ impl AppState {
         };
         let targets = self.targets_for(&snapshot.settings).await;
         let mut titles = HashMap::new();
+        let mut tbar_positions = HashMap::new();
         for id in &targets {
             let params = snapshot.settings.params_for(id).clone();
             let Ok(client) = self.pool.client(id).await else {
                 continue;
             };
-            if let Ok(title) = ops::adjust_volume(&client, &params, ticks).await {
-                titles.insert(id.clone(), title);
+            let stored = snapshot.tbar_positions.get(id).copied();
+            match ops::rotate(snapshot.kind, &client, &params, ticks, stored).await {
+                Ok(outcome) => {
+                    titles.insert(id.clone(), outcome.title);
+                    if let Some(position) = outcome.tbar_position {
+                        tbar_positions.insert(id.clone(), position);
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "dial rotate failed"),
             }
         }
         if let Some(key) = self.runtime.keys.lock().await.get_mut(context) {
             key.titles = titles.clone();
+            for (id, position) in tbar_positions {
+                key.tbar_positions.insert(id, position);
+            }
             let ordered: Vec<String> = targets
                 .iter()
                 .filter_map(|id| titles.get(id).cloned())
@@ -380,14 +408,9 @@ impl AppState {
                     segments.insert(id.clone(), SegmentState::Unavailable);
                 }
             }
-            if snapshot.kind == ActionKind::Stats {
-                if let Ok(line) = ops::stat_line(&client, params).await {
-                    titles.insert(id.clone(), line);
-                }
-            } else if snapshot.kind == ActionKind::Volume {
-                if let Ok(line) = ops::volume_title(&client, params).await {
-                    titles.insert(id.clone(), line);
-                }
+            let stored = snapshot.tbar_positions.get(id).copied();
+            if let Ok(Some(line)) = ops::live_title(snapshot.kind, &client, params, stored).await {
+                titles.insert(id.clone(), line);
             } else if let Some(title) = title_for(snapshot.kind, params) {
                 titles.insert(id.clone(), title);
             }
@@ -429,12 +452,10 @@ impl AppState {
                 )
                 .await
                 .unwrap_or(SegmentState::Unavailable);
-                title = if snapshot.kind == ActionKind::Volume {
-                    ops::volume_title(&client, params).await.ok()
-                } else if snapshot.kind == ActionKind::Stats {
-                    ops::stat_line(&client, params).await.ok()
-                } else {
-                    title_for(snapshot.kind, params)
+                let stored = snapshot.tbar_positions.get(instance_id).copied();
+                title = match ops::live_title(snapshot.kind, &client, params, stored).await {
+                    Ok(Some(line)) => Some(line),
+                    _ => title_for(snapshot.kind, params),
                 };
             }
         }
@@ -481,20 +502,26 @@ impl AppState {
             PoolEvent::Obs { id, event } => {
                 if matches!(
                     event,
-                    Event::CurrentSceneCollectionChanging { .. }
-                        | Event::CurrentProfileChanging { .. }
+                    Event::CurrentSceneCollectionChanging(_) | Event::CurrentProfileChanging(_)
                 ) {
                     self.runtime.switching.lock().await.insert(id);
                     return;
                 }
                 if matches!(
                     event,
-                    Event::CurrentSceneCollectionChanged { .. }
-                        | Event::CurrentProfileChanged { .. }
+                    Event::CurrentSceneCollectionChanged(_) | Event::CurrentProfileChanged(_)
                 ) {
                     self.runtime.switching.lock().await.remove(&id);
                 } else if self.runtime.switching.lock().await.contains(&id) {
                     return;
+                }
+                if matches!(event, Event::SceneTransitionEnded(_)) {
+                    let mut keys = self.runtime.keys.lock().await;
+                    for key in keys.values_mut() {
+                        if key.kind == ActionKind::Tbar {
+                            key.tbar_positions.insert(id.clone(), 0.0);
+                        }
+                    }
                 }
                 let contexts: Vec<String> = self
                     .runtime
@@ -665,6 +692,7 @@ impl AppState {
             settings: key.settings.clone(),
             segments: key.segments.clone(),
             titles: key.titles.clone(),
+            tbar_positions: key.tbar_positions.clone(),
             title: key.title.clone(),
             multi: key.multi,
         })
@@ -717,7 +745,7 @@ impl AppState {
                     .lock()
                     .await
                     .iter()
-                    .filter(|(_, key)| key.kind == ActionKind::Stats)
+                    .filter(|(_, key)| key.kind.polls())
                     .map(|(context, _)| context.clone())
                     .collect();
                 for context in contexts {
@@ -731,12 +759,16 @@ impl AppState {
 fn title_for(kind: ActionKind, params: &crate::contracts::ActionParams) -> Option<String> {
     let text = match kind {
         ActionKind::Scene => params.scene_name.clone(),
-        ActionKind::Source => params.source_name.clone(),
-        ActionKind::Mute | ActionKind::Volume | ActionKind::Media => params.input_name.clone(),
+        ActionKind::Source | ActionKind::Projector => params.source_name.clone(),
+        ActionKind::Mute | ActionKind::Volume | ActionKind::Media | ActionKind::Monitor => {
+            params.input_name.clone()
+        }
         ActionKind::Filter => params.filter_name.clone(),
         ActionKind::Collection => params.collection_name.clone(),
         ActionKind::Profile => params.profile_name.clone(),
         ActionKind::Chapter => params.chapter_name.clone(),
+        ActionKind::Transition => params.transition_name.clone(),
+        ActionKind::Output => params.output_name.clone(),
         _ => String::new(),
     };
     if text.trim().is_empty() {
@@ -784,6 +816,7 @@ impl Clone for LiveKey {
             settings: self.settings.clone(),
             segments: self.segments.clone(),
             titles: self.titles.clone(),
+            tbar_positions: self.tbar_positions.clone(),
             title: self.title.clone(),
             multi: self.multi,
         }

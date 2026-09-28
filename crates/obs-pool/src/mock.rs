@@ -300,7 +300,47 @@ async fn response_data(
                 "outputTotalFrames": 0
             }),
         ),
-        "ToggleStream" | "StartStream" | "StopStream" => (true, json!({"outputActive": true})),
+        "ToggleStream" | "StartStream" | "StopStream" | "ToggleOutput" => {
+            (true, json!({"outputActive": true}))
+        }
+        "GetStudioModeEnabled" => (true, json!({"studioModeEnabled": true})),
+        "GetCurrentSceneTransitionCursor" => (true, json!({"transitionCursor": 0.0})),
+        "GetCurrentSceneTransition" => (
+            true,
+            json!({
+                "transitionName": "Fade",
+                "transitionUuid": "33333333-3333-3333-3333-333333333333",
+                "transitionKind": "fade_transition",
+                "transitionFixed": false,
+                "transitionDuration": 300,
+                "transitionConfigurable": true,
+                "transitionSettings": {}
+            }),
+        ),
+        "GetOutputStatus" => (
+            true,
+            json!({
+                "outputActive": false,
+                "outputReconnecting": false,
+                "outputTimecode": "00:00:00.000",
+                "outputDuration": 0,
+                "outputCongestion": 0.0,
+                "outputBytes": 0,
+                "outputSkippedFrames": 0,
+                "outputTotalFrames": 0
+            }),
+        ),
+        "GetMediaInputStatus" => (
+            true,
+            json!({
+                "mediaState": "OBS_MEDIA_STATE_PAUSED",
+                "mediaDuration": 296000,
+                "mediaCursor": 83000
+            }),
+        ),
+        "GetInputAudioBalance" => (true, json!({"inputAudioBalance": 0.5})),
+        "GetInputAudioSyncOffset" => (true, json!({"inputAudioSyncOffset": 0})),
+        "GetInputAudioMonitorType" => (true, json!({"monitorType": "OBS_MONITORING_TYPE_NONE"})),
         "GetSceneList" => {
             let scenes = scenes.lock().await;
             let mut body = json!({

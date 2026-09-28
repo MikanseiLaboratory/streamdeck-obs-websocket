@@ -1,7 +1,7 @@
 use serde_json::Value;
 use streamdeck_plugin::{
     streamdeck_action, ActionContext, ActionPayload, DialRotatePayload, EncoderAction,
-    KeypadAction, Result,
+    KeypadAction, Result, TouchTapPayload,
 };
 
 use crate::contracts::ActionSettings;
@@ -57,6 +57,80 @@ macro_rules! obs_key {
                 ctx: &ActionContext<'_, Self::Settings, Self::State>,
             ) -> Result<()> {
                 ctx.state().end_press(&ctx.identity().context);
+                Ok(())
+            }
+
+            async fn on_property_inspector_message(
+                &mut self,
+                payload: &Value,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state()
+                    .handle_inspector(&ctx.identity().context, payload.clone());
+                Ok(())
+            }
+        }
+    };
+}
+
+macro_rules! obs_dial {
+    ($name:ident, $uuid:literal, $kind:expr) => {
+        #[derive(Default)]
+        pub struct $name;
+
+        #[streamdeck_action(uuid = $uuid, settings = ActionSettings, state = AppState)]
+        impl EncoderAction for $name {
+            async fn on_will_appear(
+                &mut self,
+                payload: &ActionPayload,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                register(ctx, $kind, payload.is_in_multi_action).await;
+                Ok(())
+            }
+
+            async fn on_will_disappear(
+                &mut self,
+                _payload: &ActionPayload,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state().remove_key(&ctx.identity().context).await;
+                Ok(())
+            }
+
+            async fn on_did_receive_settings(
+                &mut self,
+                payload: &ActionPayload,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                register(ctx, $kind, payload.is_in_multi_action).await;
+                Ok(())
+            }
+
+            async fn on_dial_rotate(
+                &mut self,
+                payload: &DialRotatePayload,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state().rotate(&ctx.identity().context, payload.ticks);
+                Ok(())
+            }
+
+            async fn on_dial_down(
+                &mut self,
+                _payload: &ActionPayload,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state().dial_down(&ctx.identity().context);
+                Ok(())
+            }
+
+            async fn on_touch_tap(
+                &mut self,
+                _payload: &TouchTapPayload,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state().dial_down(&ctx.identity().context);
                 Ok(())
             }
 
@@ -199,71 +273,62 @@ obs_key!(
     "dev.mikanseilaboratory.obs.websocket.rawbatch",
     ActionKind::RawBatch
 );
+obs_key!(
+    SplitRecordAction,
+    "dev.mikanseilaboratory.obs.websocket.splitrecord",
+    ActionKind::SplitRecord
+);
+obs_key!(
+    TransitionAction,
+    "dev.mikanseilaboratory.obs.websocket.transition",
+    ActionKind::Transition
+);
+obs_key!(
+    ProjectorAction,
+    "dev.mikanseilaboratory.obs.websocket.projector",
+    ActionKind::Projector
+);
+obs_key!(
+    OutputAction,
+    "dev.mikanseilaboratory.obs.websocket.output",
+    ActionKind::Output
+);
+obs_key!(
+    MonitorAction,
+    "dev.mikanseilaboratory.obs.websocket.monitor",
+    ActionKind::Monitor
+);
 
-#[derive(Default)]
-pub struct VolumeDial;
-
-#[streamdeck_action(
-    uuid = "dev.mikanseilaboratory.obs.websocket.volume",
-    settings = ActionSettings,
-    state = AppState,
-)]
-impl EncoderAction for VolumeDial {
-    async fn on_will_appear(
-        &mut self,
-        payload: &ActionPayload,
-        ctx: &ActionContext<'_, Self::Settings, Self::State>,
-    ) -> Result<()> {
-        register(ctx, ActionKind::Volume, payload.is_in_multi_action).await;
-        Ok(())
-    }
-
-    async fn on_will_disappear(
-        &mut self,
-        _payload: &ActionPayload,
-        ctx: &ActionContext<'_, Self::Settings, Self::State>,
-    ) -> Result<()> {
-        ctx.state().remove_key(&ctx.identity().context).await;
-        Ok(())
-    }
-
-    async fn on_did_receive_settings(
-        &mut self,
-        payload: &ActionPayload,
-        ctx: &ActionContext<'_, Self::Settings, Self::State>,
-    ) -> Result<()> {
-        register(ctx, ActionKind::Volume, payload.is_in_multi_action).await;
-        Ok(())
-    }
-
-    async fn on_dial_rotate(
-        &mut self,
-        payload: &DialRotatePayload,
-        ctx: &ActionContext<'_, Self::Settings, Self::State>,
-    ) -> Result<()> {
-        ctx.state().rotate(&ctx.identity().context, payload.ticks);
-        Ok(())
-    }
-
-    async fn on_dial_down(
-        &mut self,
-        _payload: &ActionPayload,
-        ctx: &ActionContext<'_, Self::Settings, Self::State>,
-    ) -> Result<()> {
-        ctx.state().dial_down(&ctx.identity().context);
-        Ok(())
-    }
-
-    async fn on_property_inspector_message(
-        &mut self,
-        payload: &Value,
-        ctx: &ActionContext<'_, Self::Settings, Self::State>,
-    ) -> Result<()> {
-        ctx.state()
-            .handle_inspector(&ctx.identity().context, payload.clone());
-        Ok(())
-    }
-}
+obs_dial!(
+    VolumeDial,
+    "dev.mikanseilaboratory.obs.websocket.volume",
+    ActionKind::Volume
+);
+obs_dial!(
+    TbarDial,
+    "dev.mikanseilaboratory.obs.websocket.tbar",
+    ActionKind::Tbar
+);
+obs_dial!(
+    TransitionDurationDial,
+    "dev.mikanseilaboratory.obs.websocket.transitionduration",
+    ActionKind::TransitionDuration
+);
+obs_dial!(
+    MediaJogDial,
+    "dev.mikanseilaboratory.obs.websocket.mediajog",
+    ActionKind::MediaJog
+);
+obs_dial!(
+    BalanceDial,
+    "dev.mikanseilaboratory.obs.websocket.balance",
+    ActionKind::Balance
+);
+obs_dial!(
+    SyncOffsetDial,
+    "dev.mikanseilaboratory.obs.websocket.syncoffset",
+    ActionKind::SyncOffset
+);
 
 pub fn force_link() {
     let _ = (
@@ -290,6 +355,16 @@ pub fn force_link() {
         std::any::TypeId::of::<StatsAction>(),
         std::any::TypeId::of::<RawAction>(),
         std::any::TypeId::of::<RawBatchAction>(),
+        std::any::TypeId::of::<SplitRecordAction>(),
+        std::any::TypeId::of::<TransitionAction>(),
+        std::any::TypeId::of::<ProjectorAction>(),
+        std::any::TypeId::of::<OutputAction>(),
+        std::any::TypeId::of::<MonitorAction>(),
         std::any::TypeId::of::<VolumeDial>(),
+        std::any::TypeId::of::<TbarDial>(),
+        std::any::TypeId::of::<TransitionDurationDial>(),
+        std::any::TypeId::of::<MediaJogDial>(),
+        std::any::TypeId::of::<BalanceDial>(),
+        std::any::TypeId::of::<SyncOffsetDial>(),
     );
 }
