@@ -2,6 +2,8 @@
 
 Stream Deck plugin for any number of named OBS Studio instances.  
 
+The latest build is on [GitHub Releases](https://github.com/MikanseiLaboratory/streamdeck-obs-websocket/releases/latest).
+
 ## Requirements
 
 - Stream Deck 6.4+
