@@ -143,9 +143,11 @@ export function App() {
   statusRef.current = statuses;
   sendRef.current = send;
 
-  usePluginMessage((payload: { type?: string; instances?: LiveInstance[]; items?: CatalogItem[] }) => {
-    if (payload.type === "status" && payload.instances) setStatuses(payload.instances);
-    if (payload.type === "catalog" && payload.items) setCatalog(payload.items);
+  usePluginMessage((payload: { type?: string; instances?: LiveInstance[]; items?: CatalogItem[]; payload?: { type?: string; instances?: LiveInstance[]; items?: CatalogItem[] } }) => {
+    const body = payload.type ? payload : payload.payload;
+    if (!body) return;
+    if (body.type === "status" && body.instances) setStatuses(body.instances);
+    if (body.type === "catalog" && body.items) setCatalog(body.items);
   });
 
   useEffect(() => {
@@ -177,9 +179,14 @@ export function App() {
   }, [statuses, global.settings]);
 
   useEffect(() => {
-    send({ type: "ready" });
     const resource = CATALOG[kind];
-    if (resource) send({ type: "query", resource });
+    const ping = () => {
+      send({ type: "ready" });
+      if (resource) send({ type: "query", resource });
+    };
+    ping();
+    const timer = window.setInterval(ping, 1500);
+    return () => window.clearInterval(timer);
   }, [send, kind, action.settings.common.target, action.settings.shared.sourceName]);
 
   const fields = KIND_FIELDS[kind] ?? [];
@@ -500,7 +507,15 @@ function ParamFields({
         ))}
       </datalist>
       {fields.map((field) => (
-        <Field key={field} kind={kind} field={field} params={params} listId={listId} onChange={onChange} />
+        <Field
+          key={field}
+          kind={kind}
+          field={field}
+          params={params}
+          listId={listId}
+          suggestions={suggestions}
+          onChange={onChange}
+        />
       ))}
     </>
   );
@@ -511,12 +526,14 @@ function Field({
   field,
   params,
   listId,
+  suggestions,
   onChange
 }: {
   kind: string;
   field: keyof ActionParams;
   params: ActionParams;
   listId: string;
+  suggestions: string[];
   onChange: (params: ActionParams) => void;
 }) {
   const value = params[field];
@@ -577,6 +594,37 @@ function Field({
   }
   const numeric = field === "stepDb" || field === "dialStep" || field === "monitorIndex" || field === "transitionDurationMs";
   const wide = field === "requestData" || field === "batchRequests";
+  const catalogField =
+    field === "sceneName" ||
+    field === "sourceName" ||
+    field === "inputName" ||
+    field === "filterName" ||
+    field === "collectionName" ||
+    field === "profileName" ||
+    field === "hotkeyName" ||
+    field === "transitionName" ||
+    field === "outputName";
+  if (catalogField && suggestions.length > 0) {
+    const current = String(value);
+    const options = suggestions.includes(current) || current === "" ? suggestions : [current, ...suggestions];
+    return (
+      <div type="select" className="sdpi-item">
+        <div className="sdpi-item-label">{label(field, kind)}</div>
+        <select
+          className="sdpi-item-value select"
+          value={current}
+          onChange={(event) => onChange({ ...params, [field]: event.target.value })}
+        >
+          <option value="">{current ? "—" : "Select…"}</option>
+          {options.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
   return (
     <div className="sdpi-item">
       <div className="sdpi-item-label">{label(field, kind)}</div>

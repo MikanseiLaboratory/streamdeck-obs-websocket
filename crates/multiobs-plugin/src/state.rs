@@ -647,27 +647,26 @@ impl AppState {
             .collect();
         let foreground = self.runtime.global.lock().await.fg_color.clone();
         let image = render::key_image(kind, &visual, &foreground);
-        if sender
-            .set_image(context, Some(&image), Target::HardwareAndSoftware, None)
-            .is_err()
-        {
-            return;
-        }
+        let _ = sender.set_image(context, Some(&image), Target::HardwareAndSoftware, None);
         if kind.is_dial() {
             let heading = dial_heading(kind, &settings, &targets);
             let indicator = dial_indicator(&targets, &indicators);
             let value = if title.is_empty() {
                 "—".into()
             } else {
-                title
+                title.replace('\n', " · ")
             };
+            let _ = sender.set_feedback_layout(context, "$B1");
             let _ = sender.set_feedback(
                 context,
                 &json!({
                     "title": heading,
                     "value": value,
-                    "indicator": indicator,
-                    "icon": image,
+                    "indicator": {
+                        "value": indicator,
+                        "enabled": true,
+                    },
+                    "icon": "images/icon.png",
                 }),
             );
         } else if !multi && !title.is_empty() {
@@ -882,7 +881,11 @@ impl AppState {
         let catalogs = self.clone();
         tokio::spawn(async move {
             loop {
-                catalogs.runtime.catalog_notify.notified().await;
+                let wait = catalogs.runtime.catalog_notify.notified();
+                tokio::pin!(wait);
+                if catalogs.runtime.catalog_dirty.lock().await.is_empty() {
+                    wait.await;
+                }
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 let contexts: Vec<String> = catalogs
                     .runtime
