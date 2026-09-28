@@ -5,7 +5,17 @@ import type { GlobalSettings, InstanceConfig, TargetGroup } from "./generated/co
 const PALETTE = ["#4c8dff", "#ef5b5b", "#3cba7a", "#e2b15a", "#b07cff", "#4ec8d4", "#f08bbd", "#9aa4b5"];
 
 const emptySettings = (): GlobalSettings => ({
-  instances: [],
+  instances: [
+    {
+      id: "localhost",
+      name: "localhost",
+      host: "127.0.0.1",
+      port: 4455,
+      password: "",
+      color: "#4c8dff",
+      enabled: true
+    }
+  ],
   groups: [],
   longPressMs: 500,
   fgColor: "#f4f7fb"

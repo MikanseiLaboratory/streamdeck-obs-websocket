@@ -56,8 +56,18 @@ const actionDefaults: ActionSettings = {
   params: {}
 };
 
+const defaultInstance = (): InstanceConfig => ({
+  id: "localhost",
+  name: "localhost",
+  host: "127.0.0.1",
+  port: 4455,
+  password: "",
+  color: "#4c8dff",
+  enabled: true
+});
+
 const globalDefaults: GlobalSettings = {
-  instances: [],
+  instances: [defaultInstance()],
   groups: [],
   longPressMs: 500,
   fgColor: "#f4f7fb"

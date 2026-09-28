@@ -101,7 +101,7 @@ impl From<&TargetSelector> for PoolSelector {
 #[ts(export, rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalSettings {
-    #[serde(default)]
+    #[serde(default = "default_instances")]
     pub instances: Vec<InstanceConfig>,
     #[serde(default)]
     pub groups: Vec<TargetGroup>,
@@ -119,10 +119,26 @@ fn default_fg() -> String {
     "#f4f7fb".into()
 }
 
+pub fn default_instance() -> InstanceConfig {
+    InstanceConfig {
+        id: "localhost".into(),
+        name: "localhost".into(),
+        host: default_host(),
+        port: default_port(),
+        password: String::new(),
+        color: default_color(),
+        enabled: true,
+    }
+}
+
+pub fn default_instances() -> Vec<InstanceConfig> {
+    vec![default_instance()]
+}
+
 impl Default for GlobalSettings {
     fn default() -> Self {
         Self {
-            instances: Vec::new(),
+            instances: default_instances(),
             groups: Vec::new(),
             long_press_ms: default_long_press(),
             fg_color: default_fg(),

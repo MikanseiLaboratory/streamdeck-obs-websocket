@@ -9,7 +9,7 @@ use streamdeck_plugin::{async_trait, CommandSender, PluginLifecycle, Result, Tar
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
-use crate::contracts::{ActionSettings, GlobalSettings};
+use crate::contracts::{default_instances, ActionSettings, GlobalSettings};
 use crate::kind::{ActionKind, PressKind};
 use crate::ops;
 use crate::render::{self, Segment, SegmentState};
@@ -79,7 +79,16 @@ impl AppState {
     }
 
     pub async fn apply_global_value(&self, value: &Value) {
-        let settings: GlobalSettings = serde_json::from_value(value.clone()).unwrap_or_default();
+        let mut settings: GlobalSettings =
+            serde_json::from_value(value.clone()).unwrap_or_default();
+        if settings.instances.is_empty() {
+            settings.instances = default_instances();
+            if let Some(sender) = self.runtime.sender.lock().await.clone() {
+                if let Ok(payload) = serde_json::to_value(&settings) {
+                    let _ = sender.set_global_settings(&payload);
+                }
+            }
+        }
         self.apply_global(settings).await;
     }
 
