@@ -101,7 +101,7 @@ impl From<&TargetSelector> for PoolSelector {
 #[ts(export, rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalSettings {
-    #[serde(default)]
+    #[serde(default = "default_instances")]
     pub instances: Vec<InstanceConfig>,
     #[serde(default)]
     pub groups: Vec<TargetGroup>,
@@ -119,10 +119,26 @@ fn default_fg() -> String {
     "#f4f7fb".into()
 }
 
+pub fn default_instance() -> InstanceConfig {
+    InstanceConfig {
+        id: "localhost".into(),
+        name: "localhost".into(),
+        host: default_host(),
+        port: default_port(),
+        password: String::new(),
+        color: default_color(),
+        enabled: true,
+    }
+}
+
+pub fn default_instances() -> Vec<InstanceConfig> {
+    vec![default_instance()]
+}
+
 impl Default for GlobalSettings {
     fn default() -> Self {
         Self {
-            instances: Vec::new(),
+            instances: default_instances(),
             groups: Vec::new(),
             long_press_ms: default_long_press(),
             fg_color: default_fg(),
@@ -226,6 +242,20 @@ pub struct ActionParams {
     pub batch_requests: String,
     #[serde(default)]
     pub halt_on_failure: bool,
+    #[serde(default)]
+    pub transition_name: String,
+    #[serde(default)]
+    pub transition_duration_ms: u32,
+    #[serde(default = "default_projector")]
+    pub projector_type: String,
+    #[serde(default = "default_monitor_index")]
+    pub monitor_index: i32,
+    #[serde(default)]
+    pub output_name: String,
+    #[serde(default = "default_monitor")]
+    pub monitor_type: String,
+    #[serde(default)]
+    pub dial_step: f32,
 }
 
 fn default_png() -> String {
@@ -250,6 +280,18 @@ fn default_object() -> String {
 
 fn default_array() -> String {
     "[]".into()
+}
+
+fn default_projector() -> String {
+    "program".into()
+}
+
+fn default_monitor_index() -> i32 {
+    -1
+}
+
+fn default_monitor() -> String {
+    "monitorAndOutput".into()
 }
 
 impl Default for ActionParams {
@@ -277,6 +319,13 @@ impl Default for ActionParams {
             request_data: default_object(),
             batch_requests: default_array(),
             halt_on_failure: false,
+            transition_name: String::new(),
+            transition_duration_ms: 0,
+            projector_type: default_projector(),
+            monitor_index: default_monitor_index(),
+            output_name: String::new(),
+            monitor_type: default_monitor(),
+            dial_step: 0.0,
         }
     }
 }

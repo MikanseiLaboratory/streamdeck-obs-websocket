@@ -2,7 +2,7 @@
 
 export type ActionSettings = { common: CommonSettings, advanced: AdvancedSettings, shared: ActionParams, params: { [key in string]?: ActionParams }, };
 
-export type ActionParams = { sceneName: string, sourceName: string, inputName: string, filterName: string, collectionName: string, profileName: string, format: string, filePath: string, hotkeyName: string, keyId: string, shift: boolean, control: boolean, alt: boolean, command: boolean, chapterName: string, mediaAction: string, stat: string, stepDb: number, requestType: string, requestData: string, batchRequests: string, haltOnFailure: boolean, };
+export type ActionParams = { sceneName: string, sourceName: string, inputName: string, filterName: string, collectionName: string, profileName: string, format: string, filePath: string, hotkeyName: string, keyId: string, shift: boolean, control: boolean, alt: boolean, command: boolean, chapterName: string, mediaAction: string, stat: string, stepDb: number, requestType: string, requestData: string, batchRequests: string, haltOnFailure: boolean, transitionName: string, transitionDurationMs: number, projectorType: string, monitorIndex: number, outputName: string, monitorType: string, dialStep: number, };
 
 export type AdvancedSettings = { longPress: boolean, longPressMs: number, };
 

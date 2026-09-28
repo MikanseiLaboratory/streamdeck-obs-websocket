@@ -1,11 +1,15 @@
 use obs_websocket::{Client, Event};
 use obs_websocket_core::requests::{
-    CreateRecordChapter, GetInputList, GetInputMute, GetInputVolume, GetMediaInputStatus,
+    CreateRecordChapter, GetInputAudioBalance, GetInputAudioMonitorType, GetInputAudioSyncOffset,
+    GetInputList, GetInputMute, GetInputVolume, GetMediaInputStatus, GetOutputStatus,
     GetSceneItemEnabled, GetSceneItemList, GetSceneList, GetSourceFilter, GetSourceFilterList,
-    PressInputPropertiesButton, SaveSourceScreenshot, SetCurrentPreviewScene, SetCurrentProfile,
-    SetCurrentProgramScene, SetCurrentSceneCollection, SetInputMute, SetInputVolume,
-    SetSceneItemEnabled, SetSourceFilterEnabled, SetStudioModeEnabled, ToggleInputMute,
-    TriggerHotkeyByKeySequence, TriggerHotkeyByName, TriggerMediaInputAction,
+    OffsetMediaInputCursor, OpenSourceProjector, OpenVideoMixProjector, PressInputPropertiesButton,
+    SaveSourceScreenshot, SetCurrentPreviewScene, SetCurrentProfile, SetCurrentProgramScene,
+    SetCurrentSceneCollection, SetCurrentSceneTransition, SetCurrentSceneTransitionDuration,
+    SetInputAudioBalance, SetInputAudioMonitorType, SetInputAudioSyncOffset, SetInputMute,
+    SetInputVolume, SetSceneItemEnabled, SetSourceFilterEnabled, SetStudioModeEnabled, StopOutput,
+    ToggleInputMute, ToggleOutput, TriggerHotkeyByKeySequence, TriggerHotkeyByName,
+    TriggerMediaInputAction,
 };
 use obs_websocket_core::types::KeyModifiers;
 use obs_websocket_core::ObsMediaInputAction;
@@ -20,8 +24,23 @@ const MEDIA_PLAYING: &str = "OBS_MEDIA_STATE_PLAYING";
 const MEDIA_PAUSED: &str = "OBS_MEDIA_STATE_PAUSED";
 const MEDIA_BUFFERING: &str = "OBS_MEDIA_STATE_BUFFERING";
 const MEDIA_OPENING: &str = "OBS_MEDIA_STATE_OPENING";
+const MONITOR_NONE: &str = "OBS_MONITORING_TYPE_NONE";
+const MONITOR_ONLY: &str = "OBS_MONITORING_TYPE_MONITOR_ONLY";
+const MONITOR_BOTH: &str = "OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT";
 
 type ObsResult<T> = Result<T, String>;
+
+pub struct RotateOutcome {
+    pub title: String,
+    pub indicator: u8,
+    pub tbar_position: Option<f64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LiveLabel {
+    pub text: String,
+    pub indicator: Option<u8>,
+}
 
 pub async fn execute(
     pool: &obs_pool::ObsPool,
@@ -84,6 +103,19 @@ pub async fn execute(
         ActionKind::Volume => Ok(SegmentState::Neutral),
         ActionKind::Raw => raw_request(pool, instance_id, params).await,
         ActionKind::RawBatch => raw_batch(pool, instance_id, params).await,
+        ActionKind::SplitRecord => {
+            client.record().split_record_file().await.map_err(text)?;
+            Ok(SegmentState::Neutral)
+        }
+        ActionKind::Transition => set_transition(client, params).await,
+        ActionKind::Projector => open_projector(client, params).await,
+        ActionKind::Output => output(client, params, press).await,
+        ActionKind::Monitor => monitor(client, params, press).await,
+        ActionKind::Tbar
+        | ActionKind::TransitionDuration
+        | ActionKind::MediaJog
+        | ActionKind::Balance
+        | ActionKind::SyncOffset => Ok(SegmentState::Neutral),
     }
 }
 
@@ -204,6 +236,49 @@ pub async fn fetch_state(
             })
         }
         ActionKind::Stats | ActionKind::Volume => Ok(SegmentState::Neutral),
+        ActionKind::Transition => {
+            if params.transition_name.is_empty() {
+                return Ok(SegmentState::Inactive);
+            }
+            let current = client
+                .transitions()
+                .get_current_scene_transition()
+                .await
+                .map_err(text)?;
+            Ok(flag(current.transition_name == params.transition_name))
+        }
+        ActionKind::Output => {
+            if params.output_name.is_empty() {
+                return Ok(SegmentState::Inactive);
+            }
+            let status = client
+                .outputs()
+                .get_output_status(&GetOutputStatus::new(&params.output_name))
+                .await
+                .map_err(text)?;
+            Ok(if status.output_reconnecting {
+                SegmentState::Intermediate
+            } else {
+                flag(status.output_active)
+            })
+        }
+        ActionKind::Monitor => {
+            let current = client
+                .inputs()
+                .get_input_audio_monitor_type(
+                    &GetInputAudioMonitorType::new().input_name(&params.input_name),
+                )
+                .await
+                .map_err(text)?
+                .monitor_type;
+            Ok(if current == monitor_obs_type(params) {
+                SegmentState::Active
+            } else if current == MONITOR_NONE {
+                SegmentState::Inactive
+            } else {
+                SegmentState::Intermediate
+            })
+        }
         _ => Ok(SegmentState::Neutral),
     }
 }
@@ -213,34 +288,35 @@ pub async fn fetch_state(
 /// The caller refetches state so private event fields never have to be matched.
 pub fn event_affects(kind: ActionKind, scene_output: SceneOutput, event: &Event) -> bool {
     match event {
-        Event::StreamStateChanged { .. } => kind == ActionKind::Stream,
-        Event::RecordStateChanged { .. } => {
+        Event::StreamStateChanged(_) => kind == ActionKind::Stream,
+        Event::RecordStateChanged(_) => {
             matches!(kind, ActionKind::Record | ActionKind::RecordPause)
         }
-        Event::ReplayBufferStateChanged { .. } => kind == ActionKind::Replay,
-        Event::VirtualcamStateChanged { .. } => kind == ActionKind::VirtualCam,
-        Event::StudioModeStateChanged { .. } => {
+        Event::ReplayBufferStateChanged(_) => kind == ActionKind::Replay,
+        Event::VirtualcamStateChanged(_) => kind == ActionKind::VirtualCam,
+        Event::StudioModeStateChanged(_) => {
             kind == ActionKind::StudioMode
+                || kind == ActionKind::Tbar
                 || (kind == ActionKind::Scene && follows_preview(scene_output))
         }
-        Event::CurrentProgramSceneChanged { .. } => {
+        Event::CurrentProgramSceneChanged(_) => {
             kind == ActionKind::Scene
                 && matches!(scene_output, SceneOutput::Program | SceneOutput::Both)
         }
-        Event::CurrentPreviewSceneChanged { .. } => {
+        Event::CurrentPreviewSceneChanged(_) => {
             kind == ActionKind::Scene && follows_preview(scene_output)
         }
-        Event::SceneNameChanged { .. } => kind == ActionKind::Scene,
-        Event::SceneItemEnableStateChanged { .. } | Event::SceneItemRemoved { .. } => {
+        Event::SceneNameChanged(_) => kind == ActionKind::Scene,
+        Event::SceneItemEnableStateChanged(_) | Event::SceneItemRemoved(_) => {
             kind == ActionKind::Source
         }
-        Event::InputMuteStateChanged { .. } | Event::InputRemoved { .. } => {
-            kind == ActionKind::Mute
+        Event::InputMuteStateChanged(_) | Event::InputRemoved(_) => {
+            matches!(kind, ActionKind::Mute | ActionKind::Volume)
         }
-        Event::SourceFilterEnableStateChanged { .. } | Event::SourceFilterRemoved { .. } => {
+        Event::SourceFilterEnableStateChanged(_) | Event::SourceFilterRemoved(_) => {
             kind == ActionKind::Filter
         }
-        Event::CurrentSceneCollectionChanged { .. } | Event::CurrentProfileChanged { .. } => {
+        Event::CurrentSceneCollectionChanged(_) | Event::CurrentProfileChanged(_) => {
             matches!(
                 kind,
                 ActionKind::Scene
@@ -250,13 +326,60 @@ pub fn event_affects(kind: ActionKind, scene_output: SceneOutput, event: &Event)
                     | ActionKind::Media
                     | ActionKind::Collection
                     | ActionKind::Profile
+                    | ActionKind::Transition
+                    | ActionKind::Output
+                    | ActionKind::Monitor
+                    | ActionKind::MediaJog
+                    | ActionKind::Balance
+                    | ActionKind::SyncOffset
+                    | ActionKind::Projector
             )
         }
-        Event::MediaInputPlaybackStarted { .. }
-        | Event::MediaInputPlaybackEnded { .. }
-        | Event::MediaInputActionTriggered { .. } => kind == ActionKind::Media,
-        Event::InputVolumeChanged { .. } => kind == ActionKind::Volume,
+        Event::MediaInputPlaybackStarted(_)
+        | Event::MediaInputPlaybackEnded(_)
+        | Event::MediaInputActionTriggered(_) => {
+            matches!(kind, ActionKind::Media | ActionKind::MediaJog)
+        }
+        Event::InputVolumeChanged(_) => kind == ActionKind::Volume,
+        Event::CurrentSceneTransitionChanged(_) => {
+            matches!(
+                kind,
+                ActionKind::Transition | ActionKind::TransitionDuration
+            )
+        }
+        Event::CurrentSceneTransitionDurationChanged(_) => kind == ActionKind::TransitionDuration,
+        Event::SceneTransitionEnded(_) => kind == ActionKind::Tbar,
+        Event::InputAudioMonitorTypeChanged(_) => kind == ActionKind::Monitor,
+        Event::InputAudioBalanceChanged(_) => kind == ActionKind::Balance,
+        Event::InputAudioSyncOffsetChanged(_) => kind == ActionKind::SyncOffset,
         _ => false,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CatalogRefresh {
+    None,
+    Resource(&'static str),
+    All,
+}
+
+pub fn catalog_refresh_for(event: &Event) -> CatalogRefresh {
+    match event {
+        Event::SceneCreated(_)
+        | Event::SceneRemoved(_)
+        | Event::SceneNameChanged(_)
+        | Event::SceneListChanged(_) => CatalogRefresh::Resource("scenes"),
+        Event::InputCreated(_) | Event::InputRemoved(_) | Event::InputNameChanged(_) => {
+            CatalogRefresh::Resource("inputs")
+        }
+        Event::SourceFilterCreated(_)
+        | Event::SourceFilterRemoved(_)
+        | Event::SourceFilterNameChanged(_)
+        | Event::SourceFilterListReindexed(_) => CatalogRefresh::Resource("filters"),
+        Event::SceneCollectionListChanged(_) => CatalogRefresh::Resource("collections"),
+        Event::ProfileListChanged(_) => CatalogRefresh::Resource("profiles"),
+        Event::CurrentSceneCollectionChanged(_) => CatalogRefresh::All,
+        _ => CatalogRefresh::None,
     }
 }
 
@@ -276,12 +399,17 @@ pub async fn stat_line(client: &Client, params: &ActionParams) -> ObsResult<Stri
 }
 
 pub async fn volume_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
-    let current = client
+    let db = current_volume_db(client, params).await?;
+    Ok(format!("{db:.1} dB"))
+}
+
+async fn current_volume_db(client: &Client, params: &ActionParams) -> ObsResult<f64> {
+    Ok(client
         .inputs()
         .get_input_volume(&GetInputVolume::new().input_name(&params.input_name))
         .await
-        .map_err(text)?;
-    Ok(format!("{:.1} dB", current.input_volume_db))
+        .map_err(text)?
+        .input_volume_db)
 }
 
 pub async fn adjust_volume(
@@ -310,6 +438,129 @@ pub async fn adjust_volume(
         .await
         .map_err(text)?;
     Ok(format!("{next:.1} dB"))
+}
+
+pub async fn live_title(
+    kind: ActionKind,
+    client: &Client,
+    params: &ActionParams,
+    tbar_position: Option<f64>,
+) -> ObsResult<Option<LiveLabel>> {
+    match kind {
+        ActionKind::Stats => Ok(Some(LiveLabel {
+            text: stat_line(client, params).await?,
+            indicator: None,
+        })),
+        ActionKind::Volume => {
+            let db = current_volume_db(client, params).await?;
+            Ok(Some(LiveLabel {
+                text: format!("{db:.1} dB"),
+                indicator: Some(volume_indicator(db)),
+            }))
+        }
+        ActionKind::Tbar => {
+            let position = tbar_position.unwrap_or(0.0);
+            Ok(Some(LiveLabel {
+                text: tbar_title(position),
+                indicator: Some(tbar_indicator(position)),
+            }))
+        }
+        ActionKind::TransitionDuration => {
+            let ms = current_transition_ms(client).await?;
+            Ok(Some(LiveLabel {
+                text: format!("{ms} ms"),
+                indicator: Some(duration_indicator(ms)),
+            }))
+        }
+        ActionKind::MediaJog => Ok(Some(media_label(client, params).await?)),
+        ActionKind::Balance => {
+            let value = current_balance(client, params).await?;
+            Ok(Some(LiveLabel {
+                text: format_balance(value),
+                indicator: Some(balance_indicator(value)),
+            }))
+        }
+        ActionKind::SyncOffset => {
+            let ms = current_sync_offset(client, params).await?;
+            Ok(Some(LiveLabel {
+                text: format_sync_offset(ms),
+                indicator: Some(sync_indicator(ms)),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+pub async fn rotate(
+    kind: ActionKind,
+    client: &Client,
+    params: &ActionParams,
+    ticks: i32,
+    tbar_position: Option<f64>,
+) -> ObsResult<RotateOutcome> {
+    match kind {
+        ActionKind::Volume => {
+            let title = adjust_volume(client, params, ticks).await?;
+            let db = current_volume_db(client, params).await?;
+            Ok(RotateOutcome {
+                title,
+                indicator: volume_indicator(db),
+                tbar_position: None,
+            })
+        }
+        ActionKind::Tbar => rotate_tbar(client, params, ticks, tbar_position).await,
+        ActionKind::TransitionDuration => rotate_duration(client, params, ticks).await,
+        ActionKind::MediaJog => rotate_media(client, params, ticks).await,
+        ActionKind::Balance => rotate_balance(client, params, ticks).await,
+        ActionKind::SyncOffset => rotate_sync_offset(client, params, ticks).await,
+        _ => Err("this action does not rotate".into()),
+    }
+}
+
+pub async fn dial_press(
+    kind: ActionKind,
+    client: &Client,
+    params: &ActionParams,
+) -> ObsResult<Option<String>> {
+    match kind {
+        ActionKind::Volume => {
+            toggle_mute(client, params).await?;
+            Ok(Some(volume_title(client, params).await?))
+        }
+        ActionKind::Tbar | ActionKind::TransitionDuration => {
+            client
+                .transitions()
+                .trigger_studio_mode_transition()
+                .await
+                .map_err(text)?;
+            Ok(None)
+        }
+        ActionKind::MediaJog => {
+            media(client, params).await?;
+            Ok(Some(media_title(client, params).await?))
+        }
+        ActionKind::Balance => {
+            client
+                .inputs()
+                .set_input_audio_balance(
+                    &SetInputAudioBalance::new(0.5).input_name(&params.input_name),
+                )
+                .await
+                .map_err(text)?;
+            Ok(Some(format_balance(0.5)))
+        }
+        ActionKind::SyncOffset => {
+            client
+                .inputs()
+                .set_input_audio_sync_offset(
+                    &SetInputAudioSyncOffset::new(0).input_name(&params.input_name),
+                )
+                .await
+                .map_err(text)?;
+            Ok(Some(format_sync_offset(0)))
+        }
+        _ => Ok(None),
+    }
 }
 
 pub async fn toggle_mute(client: &Client, params: &ActionParams) -> ObsResult<bool> {
@@ -766,9 +1017,411 @@ pub async fn catalog(
             .into_iter()
             .map(|filter| filter.filter_name)
             .collect(),
+        "transitions" => client
+            .transitions()
+            .get_scene_transition_list()
+            .await
+            .map_err(text)?
+            .transitions
+            .into_iter()
+            .map(|transition| transition.transition_name)
+            .collect(),
+        "outputs" => client
+            .outputs()
+            .get_output_list()
+            .await
+            .map_err(text)?
+            .outputs
+            .into_iter()
+            .map(|output| output.output_name)
+            .collect(),
         _ => Vec::new(),
     };
     Ok(names)
+}
+
+async fn set_transition(client: &Client, params: &ActionParams) -> ObsResult<SegmentState> {
+    if params.transition_name.trim().is_empty() {
+        return Err("transition name is empty".into());
+    }
+    client
+        .transitions()
+        .set_current_scene_transition(&SetCurrentSceneTransition::new(&params.transition_name))
+        .await
+        .map_err(text)?;
+    if params.transition_duration_ms > 0 {
+        client
+            .transitions()
+            .set_current_scene_transition_duration(&SetCurrentSceneTransitionDuration::new(
+                i64::from(params.transition_duration_ms),
+            ))
+            .await
+            .map_err(text)?;
+    }
+    Ok(SegmentState::Active)
+}
+
+async fn open_projector(client: &Client, params: &ActionParams) -> ObsResult<SegmentState> {
+    if params.projector_type == "source" {
+        if params.source_name.trim().is_empty() {
+            return Err("projector source name is empty".into());
+        }
+        let mut request = OpenSourceProjector::new().source_name(&params.source_name);
+        if params.monitor_index >= 0 {
+            request = request.monitor_index(i64::from(params.monitor_index));
+        }
+        client
+            .ui()
+            .open_source_projector(&request)
+            .await
+            .map_err(text)?;
+    } else {
+        let mix = match params.projector_type.as_str() {
+            "preview" => "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PREVIEW",
+            "multiview" => "OBS_WEBSOCKET_VIDEO_MIX_TYPE_MULTIVIEW",
+            _ => "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PROGRAM",
+        };
+        let mut request = OpenVideoMixProjector::new(mix);
+        if params.monitor_index >= 0 {
+            request = request.monitor_index(i64::from(params.monitor_index));
+        }
+        client
+            .ui()
+            .open_video_mix_projector(&request)
+            .await
+            .map_err(text)?;
+    }
+    Ok(SegmentState::Neutral)
+}
+
+async fn output(
+    client: &Client,
+    params: &ActionParams,
+    press: PressKind,
+) -> ObsResult<SegmentState> {
+    if params.output_name.trim().is_empty() {
+        return Err("output name is empty".into());
+    }
+    if press == PressKind::Long {
+        client
+            .outputs()
+            .stop_output(&StopOutput::new(&params.output_name))
+            .await
+            .map_err(text)?;
+        return Ok(SegmentState::Inactive);
+    }
+    let active = client
+        .outputs()
+        .toggle_output(&ToggleOutput::new(&params.output_name))
+        .await
+        .map_err(text)?;
+    Ok(flag(active.output_active))
+}
+
+async fn monitor(
+    client: &Client,
+    params: &ActionParams,
+    press: PressKind,
+) -> ObsResult<SegmentState> {
+    let selected = monitor_obs_type(params);
+    let next = if press == PressKind::Long {
+        MONITOR_NONE
+    } else {
+        let current = client
+            .inputs()
+            .get_input_audio_monitor_type(
+                &GetInputAudioMonitorType::new().input_name(&params.input_name),
+            )
+            .await
+            .map_err(text)?
+            .monitor_type;
+        if current == selected {
+            MONITOR_NONE
+        } else {
+            selected
+        }
+    };
+    client
+        .inputs()
+        .set_input_audio_monitor_type(
+            &SetInputAudioMonitorType::new(next).input_name(&params.input_name),
+        )
+        .await
+        .map_err(text)?;
+    Ok(flag(next != MONITOR_NONE))
+}
+
+async fn rotate_tbar(
+    client: &Client,
+    params: &ActionParams,
+    ticks: i32,
+    stored: Option<f64>,
+) -> ObsResult<RotateOutcome> {
+    let enabled = client
+        .ui()
+        .get_studio_mode_enabled()
+        .await
+        .map_err(text)?
+        .studio_mode_enabled;
+    if !enabled {
+        return Err("studio mode is disabled".into());
+    }
+    let current = match stored {
+        Some(position) => position,
+        None => match client
+            .transitions()
+            .get_current_scene_transition_cursor()
+            .await
+        {
+            Ok(cursor) if cursor.transition_cursor < 1.0 => cursor.transition_cursor,
+            _ => 0.0,
+        },
+    };
+    let step = f64::from(dial_step(params, 5.0)) / 100.0;
+    let next = (current + f64::from(ticks) * step).clamp(0.0, 1.0);
+    let release = next <= 0.0 || next >= 1.0;
+    // Typed SetTBarPosition.position is i64; send a float via raw request.
+    client
+        .raw_request(
+            "SetTBarPosition",
+            json!({ "position": next, "release": release }),
+        )
+        .await
+        .map_err(text)?;
+    let stored = if release { 0.0 } else { next };
+    Ok(RotateOutcome {
+        title: tbar_title(stored),
+        indicator: tbar_indicator(stored),
+        tbar_position: Some(stored),
+    })
+}
+
+async fn rotate_duration(
+    client: &Client,
+    params: &ActionParams,
+    ticks: i32,
+) -> ObsResult<RotateOutcome> {
+    let current = client
+        .transitions()
+        .get_current_scene_transition()
+        .await
+        .map_err(text)?;
+    let current_ms = current.transition_duration.unwrap_or(300);
+    let step = i64::from(dial_step(params, 50.0).round() as i32);
+    let next = (current_ms + i64::from(ticks) * step).clamp(50, 20_000);
+    client
+        .transitions()
+        .set_current_scene_transition_duration(&SetCurrentSceneTransitionDuration::new(next))
+        .await
+        .map_err(text)?;
+    Ok(RotateOutcome {
+        title: format!("{next} ms"),
+        indicator: duration_indicator(next),
+        tbar_position: None,
+    })
+}
+
+async fn rotate_media(
+    client: &Client,
+    params: &ActionParams,
+    ticks: i32,
+) -> ObsResult<RotateOutcome> {
+    let step_ms = i64::from((dial_step(params, 5.0) * 1000.0).round() as i32) * i64::from(ticks);
+    client
+        .media_inputs()
+        .offset_media_input_cursor(
+            &OffsetMediaInputCursor::new(step_ms).input_name(&params.input_name),
+        )
+        .await
+        .map_err(text)?;
+    let label = media_label(client, params).await?;
+    Ok(RotateOutcome {
+        title: label.text,
+        indicator: label.indicator.unwrap_or(0),
+        tbar_position: None,
+    })
+}
+
+async fn rotate_balance(
+    client: &Client,
+    params: &ActionParams,
+    ticks: i32,
+) -> ObsResult<RotateOutcome> {
+    let current = client
+        .inputs()
+        .get_input_audio_balance(&GetInputAudioBalance::new().input_name(&params.input_name))
+        .await
+        .map_err(text)?
+        .input_audio_balance;
+    let step = f64::from(dial_step(params, 5.0)) / 100.0;
+    let next = (current + f64::from(ticks) * step).clamp(0.0, 1.0);
+    client
+        .inputs()
+        .set_input_audio_balance(&SetInputAudioBalance::new(next).input_name(&params.input_name))
+        .await
+        .map_err(text)?;
+    Ok(RotateOutcome {
+        title: format_balance(next),
+        indicator: balance_indicator(next),
+        tbar_position: None,
+    })
+}
+
+async fn rotate_sync_offset(
+    client: &Client,
+    params: &ActionParams,
+    ticks: i32,
+) -> ObsResult<RotateOutcome> {
+    let current = client
+        .inputs()
+        .get_input_audio_sync_offset(&GetInputAudioSyncOffset::new().input_name(&params.input_name))
+        .await
+        .map_err(text)?
+        .input_audio_sync_offset;
+    let step = i64::from(dial_step(params, 10.0).round() as i32);
+    let next = (current + i64::from(ticks) * step).clamp(-950, 20_000);
+    client
+        .inputs()
+        .set_input_audio_sync_offset(
+            &SetInputAudioSyncOffset::new(next).input_name(&params.input_name),
+        )
+        .await
+        .map_err(text)?;
+    Ok(RotateOutcome {
+        title: format_sync_offset(next),
+        indicator: sync_indicator(next),
+        tbar_position: None,
+    })
+}
+
+async fn current_transition_ms(client: &Client) -> ObsResult<i64> {
+    Ok(client
+        .transitions()
+        .get_current_scene_transition()
+        .await
+        .map_err(text)?
+        .transition_duration
+        .unwrap_or(300))
+}
+
+async fn media_label(client: &Client, params: &ActionParams) -> ObsResult<LiveLabel> {
+    let status = client
+        .media_inputs()
+        .get_media_input_status(&GetMediaInputStatus::new().input_name(&params.input_name))
+        .await
+        .map_err(text)?;
+    let cursor = status.media_cursor.unwrap_or(0);
+    let duration = status.media_duration.unwrap_or(0);
+    Ok(LiveLabel {
+        text: format!(
+            "{} / {}",
+            format_timecode(cursor),
+            format_timecode(duration)
+        ),
+        indicator: Some(media_indicator(cursor, duration)),
+    })
+}
+
+async fn media_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
+    Ok(media_label(client, params).await?.text)
+}
+
+async fn current_balance(client: &Client, params: &ActionParams) -> ObsResult<f64> {
+    Ok(client
+        .inputs()
+        .get_input_audio_balance(&GetInputAudioBalance::new().input_name(&params.input_name))
+        .await
+        .map_err(text)?
+        .input_audio_balance)
+}
+
+async fn current_sync_offset(client: &Client, params: &ActionParams) -> ObsResult<i64> {
+    Ok(client
+        .inputs()
+        .get_input_audio_sync_offset(&GetInputAudioSyncOffset::new().input_name(&params.input_name))
+        .await
+        .map_err(text)?
+        .input_audio_sync_offset)
+}
+
+fn tbar_title(position: f64) -> String {
+    format!("{:.0}%", position * 100.0)
+}
+
+fn volume_indicator(db: f64) -> u8 {
+    scale_indicator(db, -96.0, 26.0)
+}
+
+fn tbar_indicator(position: f64) -> u8 {
+    scale_indicator(position * 100.0, 0.0, 100.0)
+}
+
+fn duration_indicator(ms: i64) -> u8 {
+    scale_indicator(ms as f64, 50.0, 20_000.0)
+}
+
+fn media_indicator(cursor: i64, duration: i64) -> u8 {
+    if duration <= 0 {
+        0
+    } else {
+        scale_indicator(cursor as f64, 0.0, duration as f64)
+    }
+}
+
+fn balance_indicator(value: f64) -> u8 {
+    scale_indicator(value * 100.0, 0.0, 100.0)
+}
+
+fn sync_indicator(ms: i64) -> u8 {
+    scale_indicator(ms as f64, -950.0, 20_000.0)
+}
+
+pub fn scale_indicator(value: f64, min: f64, max: f64) -> u8 {
+    if max <= min {
+        return 0;
+    }
+    (((value - min) / (max - min)) * 100.0)
+        .clamp(0.0, 100.0)
+        .round() as u8
+}
+
+fn format_balance(value: f64) -> String {
+    let offset = ((value - 0.5) * 200.0).round() as i32;
+    if offset.abs() < 1 {
+        "C".into()
+    } else if offset < 0 {
+        format!("L {}", -offset)
+    } else {
+        format!("R {offset}")
+    }
+}
+
+fn format_sync_offset(ms: i64) -> String {
+    if ms >= 0 {
+        format!("+{ms} ms")
+    } else {
+        format!("{ms} ms")
+    }
+}
+
+fn format_timecode(ms: i64) -> String {
+    let total = ms.max(0) / 1000;
+    format!("{:02}:{:02}", total / 60, total % 60)
+}
+
+fn monitor_obs_type(params: &ActionParams) -> &'static str {
+    match params.monitor_type.as_str() {
+        "monitorOnly" => MONITOR_ONLY,
+        _ => MONITOR_BOTH,
+    }
+}
+
+fn dial_step(params: &ActionParams, default: f32) -> f32 {
+    if params.dial_step == 0.0 {
+        default
+    } else {
+        params.dial_step
+    }
 }
 
 fn output_flag(active: bool, paused: bool) -> SegmentState {
@@ -886,14 +1539,184 @@ mod tests {
         for server in [&first, &second] {
             let requests = server.requests().await;
             assert!(
-                requests.iter().any(|request| {
-                    request
-                        .pointer("/d/requestType")
-                        .and_then(|value| value.as_str())
-                        == Some("ToggleStream")
-                }),
+                sent(&requests, "ToggleStream"),
                 "ToggleStream was not sent: {requests:?}"
             );
         }
+    }
+
+    fn sent(requests: &[serde_json::Value], request_type: &str) -> bool {
+        requests.iter().any(|request| {
+            request
+                .pointer("/d/requestType")
+                .and_then(|value| value.as_str())
+                == Some(request_type)
+        })
+    }
+
+    fn request_data<'a>(
+        requests: &'a [serde_json::Value],
+        request_type: &str,
+    ) -> Option<&'a serde_json::Value> {
+        requests.iter().rev().find_map(|request| {
+            (request
+                .pointer("/d/requestType")
+                .and_then(|value| value.as_str())
+                == Some(request_type))
+            .then(|| request.pointer("/d/requestData"))
+            .flatten()
+        })
+    }
+
+    async fn connect_one() -> (MockObs, ObsPool, String) {
+        let server = MockObs::spawn(None).await;
+        let pool = ObsPool::new(PoolOptions::for_tests());
+        pool.reconcile(vec![instance("a", server.port)], vec![])
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                if pool.client("a").await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            }
+        })
+        .await
+        .expect("instance connected");
+        (server, pool, "a".into())
+    }
+
+    #[tokio::test]
+    async fn split_record_sends_split_record_file() {
+        let (server, pool, id) = connect_one().await;
+        let client = pool.client(&id).await.unwrap();
+        execute(
+            &pool,
+            &id,
+            ActionKind::SplitRecord,
+            &client,
+            &ActionParams::default(),
+            SceneOutput::Program,
+            PressKind::Single,
+        )
+        .await
+        .unwrap();
+        assert!(sent(&server.requests().await, "SplitRecordFile"));
+    }
+
+    #[tokio::test]
+    async fn output_toggle_sends_toggle_output() {
+        let (server, pool, id) = connect_one().await;
+        let client = pool.client(&id).await.unwrap();
+        let params = ActionParams {
+            output_name: "vertical".into(),
+            ..ActionParams::default()
+        };
+        execute(
+            &pool,
+            &id,
+            ActionKind::Output,
+            &client,
+            &params,
+            SceneOutput::Program,
+            PressKind::Single,
+        )
+        .await
+        .unwrap();
+        assert!(sent(&server.requests().await, "ToggleOutput"));
+    }
+
+    #[tokio::test]
+    async fn tbar_holds_then_releases_at_full() {
+        let (server, pool, id) = connect_one().await;
+        let client = pool.client(&id).await.unwrap();
+        let first = rotate(
+            ActionKind::Tbar,
+            &client,
+            &ActionParams::default(),
+            1,
+            Some(0.0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.tbar_position, Some(0.05));
+        assert_eq!(first.indicator, 5);
+        let requests = server.requests().await;
+        let data = request_data(&requests, "SetTBarPosition").unwrap();
+        assert_eq!(data["release"], false);
+        assert!((data["position"].as_f64().unwrap() - 0.05).abs() < 0.001);
+
+        let last = rotate(
+            ActionKind::Tbar,
+            &client,
+            &ActionParams::default(),
+            1,
+            Some(0.95),
+        )
+        .await
+        .unwrap();
+        assert_eq!(last.tbar_position, Some(0.0));
+        let requests = server.requests().await;
+        let data = request_data(&requests, "SetTBarPosition").unwrap();
+        assert_eq!(data["release"], true);
+        assert!((data["position"].as_f64().unwrap() - 1.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn transition_duration_clamps_to_obs_range() {
+        let (_server, pool, id) = connect_one().await;
+        let client = pool.client(&id).await.unwrap();
+        let outcome = rotate(
+            ActionKind::TransitionDuration,
+            &client,
+            &ActionParams::default(),
+            -100,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.title, "50 ms");
+        assert_eq!(outcome.indicator, 0);
+    }
+
+    #[test]
+    fn maps_dial_values_onto_the_layout_bar() {
+        assert_eq!(scale_indicator(-96.0, -96.0, 26.0), 0);
+        assert_eq!(scale_indicator(26.0, -96.0, 26.0), 100);
+        assert_eq!(scale_indicator(50.0, 0.0, 100.0), 50);
+    }
+
+    #[test]
+    fn catalog_refresh_follows_obs_list_events() {
+        let scene = Event::from_parts(
+            "SceneCreated",
+            json!({"sceneName": "Cam", "sceneUuid": "u", "isGroup": false}),
+        )
+        .unwrap();
+        let input = Event::from_parts(
+            "InputRemoved",
+            json!({"inputName": "Mic", "inputUuid": "u"}),
+        )
+        .unwrap();
+        let collection = Event::from_parts(
+            "CurrentSceneCollectionChanged",
+            json!({"sceneCollectionName": "Show"}),
+        )
+        .unwrap();
+        let stream = Event::from_parts(
+            "StreamStateChanged",
+            json!({"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTED"}),
+        )
+        .unwrap();
+        assert_eq!(
+            catalog_refresh_for(&scene),
+            CatalogRefresh::Resource("scenes")
+        );
+        assert_eq!(
+            catalog_refresh_for(&input),
+            CatalogRefresh::Resource("inputs")
+        );
+        assert_eq!(catalog_refresh_for(&collection), CatalogRefresh::All);
+        assert_eq!(catalog_refresh_for(&stream), CatalogRefresh::None);
     }
 }

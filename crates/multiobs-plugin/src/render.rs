@@ -148,6 +148,18 @@ fn icon_path(kind: ActionKind) -> &'static str {
         ActionKind::Raw | ActionKind::RawBatch => {
             r#"<path d="M18 20l-8 12 8 12M46 20l8 12-8 12M36 16l-8 32"/>"#
         }
+        ActionKind::SplitRecord => r#"<path d="M16 16v32M32 16v32M20 24h8M20 40h8"/>"#,
+        ActionKind::Transition => r#"<path d="M12 16h16l24 32H36z"/>"#,
+        ActionKind::Projector => {
+            r#"<rect x="10" y="18" width="28" height="20" rx="3"/><path d="M38 24l16-6v24l-16-6"/>"#
+        }
+        ActionKind::Output => r#"<path d="M16 32h24M32 18l16 14-16 14M16 18v28"/>"#,
+        ActionKind::Monitor => r#"<path d="M12 26h10l12-10v32L22 38H12zM42 22a14 14 0 0 1 0 20"/>"#,
+        ActionKind::Tbar => r#"<path d="M12 32h40M32 16v32M20 24h24"/>"#,
+        ActionKind::TransitionDuration => r#"<path d="M16 32h32M40 22l8 10-8 10M16 20v24"/>"#,
+        ActionKind::MediaJog => r#"<path d="M16 16v32l14-10 14 10V16L30 26z"/>"#,
+        ActionKind::Balance => r#"<path d="M12 32h40M20 22l-8 10 8 10M44 22l8 10-8 10"/>"#,
+        ActionKind::SyncOffset => r#"<path d="M16 32h32M24 20v24M40 20v24"/>"#,
     }
 }
 

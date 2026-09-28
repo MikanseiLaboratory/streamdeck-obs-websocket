@@ -39,7 +39,14 @@ const emptyParams = (): ActionParams => ({
   requestType: "",
   requestData: "{}",
   batchRequests: "[]",
-  haltOnFailure: false
+  haltOnFailure: false,
+  transitionName: "",
+  transitionDurationMs: 0,
+  projectorType: "program",
+  monitorIndex: -1,
+  outputName: "",
+  monitorType: "monitorAndOutput",
+  dialStep: 0
 });
 
 const actionDefaults: ActionSettings = {
@@ -49,8 +56,18 @@ const actionDefaults: ActionSettings = {
   params: {}
 };
 
+const defaultInstance = (): InstanceConfig => ({
+  id: "localhost",
+  name: "localhost",
+  host: "127.0.0.1",
+  port: 4455,
+  password: "",
+  color: "#4c8dff",
+  enabled: true
+});
+
 const globalDefaults: GlobalSettings = {
-  instances: [],
+  instances: [defaultInstance()],
   groups: [],
   longPressMs: 500,
   fgColor: "#f4f7fb"
@@ -74,7 +91,16 @@ const KIND_FIELDS: Record<string, Array<keyof ActionParams>> = {
   stats: ["stat"],
   volume: ["inputName", "stepDb"],
   raw: ["requestType", "requestData"],
-  rawbatch: ["batchRequests", "haltOnFailure"]
+  rawbatch: ["batchRequests", "haltOnFailure"],
+  transition: ["transitionName", "transitionDurationMs"],
+  projector: ["projectorType", "sourceName", "monitorIndex"],
+  output: ["outputName"],
+  monitor: ["inputName", "monitorType"],
+  tbar: ["dialStep"],
+  transitionduration: ["dialStep"],
+  mediajog: ["inputName", "dialStep"],
+  balance: ["inputName", "dialStep"],
+  syncoffset: ["inputName", "dialStep"]
 };
 
 const CATALOG: Record<string, string> = {
@@ -89,7 +115,13 @@ const CATALOG: Record<string, string> = {
   refreshbrowser: "inputs",
   refreshcapture: "inputs",
   media: "inputs",
-  volume: "inputs"
+  volume: "inputs",
+  transition: "transitions",
+  output: "outputs",
+  monitor: "inputs",
+  mediajog: "inputs",
+  balance: "inputs",
+  syncoffset: "inputs"
 };
 
 const CONFIG_WINDOW = "obs-websocket-config";
@@ -111,9 +143,11 @@ export function App() {
   statusRef.current = statuses;
   sendRef.current = send;
 
-  usePluginMessage((payload: { type?: string; instances?: LiveInstance[]; items?: CatalogItem[] }) => {
-    if (payload.type === "status" && payload.instances) setStatuses(payload.instances);
-    if (payload.type === "catalog" && payload.items) setCatalog(payload.items);
+  usePluginMessage((payload: { type?: string; instances?: LiveInstance[]; items?: CatalogItem[]; payload?: { type?: string; instances?: LiveInstance[]; items?: CatalogItem[] } }) => {
+    const body = payload.type ? payload : payload.payload;
+    if (!body) return;
+    if (body.type === "status" && body.instances) setStatuses(body.instances);
+    if (body.type === "catalog" && body.items) setCatalog(body.items);
   });
 
   useEffect(() => {
@@ -145,9 +179,14 @@ export function App() {
   }, [statuses, global.settings]);
 
   useEffect(() => {
-    send({ type: "ready" });
     const resource = CATALOG[kind];
-    if (resource) send({ type: "query", resource });
+    const ping = () => {
+      send({ type: "ready" });
+      if (resource) send({ type: "query", resource });
+    };
+    ping();
+    const timer = window.setInterval(ping, 1500);
+    return () => window.clearInterval(timer);
   }, [send, kind, action.settings.common.target, action.settings.shared.sourceName]);
 
   const fields = KIND_FIELDS[kind] ?? [];
@@ -468,21 +507,33 @@ function ParamFields({
         ))}
       </datalist>
       {fields.map((field) => (
-        <Field key={field} field={field} params={params} listId={listId} onChange={onChange} />
+        <Field
+          key={field}
+          kind={kind}
+          field={field}
+          params={params}
+          listId={listId}
+          suggestions={suggestions}
+          onChange={onChange}
+        />
       ))}
     </>
   );
 }
 
 function Field({
+  kind,
   field,
   params,
   listId,
+  suggestions,
   onChange
 }: {
+  kind: string;
   field: keyof ActionParams;
   params: ActionParams;
   listId: string;
+  suggestions: string[];
   onChange: (params: ActionParams) => void;
 }) {
   const value = params[field];
@@ -490,7 +541,7 @@ function Field({
     const id = `field-${field}`;
     return (
       <div type="checkbox" className="sdpi-item">
-        <div className="sdpi-item-label">{label(field)}</div>
+        <div className="sdpi-item-label">{label(field, kind)}</div>
         <input
           id={id}
           className="sdpi-item-value"
@@ -500,36 +551,83 @@ function Field({
         />
         <label htmlFor={id}>
           <span></span>
-          {label(field)}
+          {label(field, kind)}
         </label>
       </div>
     );
   }
-  if (field === "mediaAction" || field === "stat" || field === "format") {
+  if (field === "mediaAction" || field === "stat" || field === "format" || field === "projectorType" || field === "monitorType") {
     const options =
       field === "stat"
         ? ["fps", "cpu", "memory", "dropped"]
         : field === "format"
           ? ["png", "jpg", "webp"]
-          : ["toggle", "play", "pause", "stop", "restart", "next", "previous"];
+          : field === "projectorType"
+            ? [
+                { value: "program", label: "Program" },
+                { value: "preview", label: "Preview" },
+                { value: "multiview", label: "Multiview" },
+                { value: "source", label: "Source" }
+              ]
+            : field === "monitorType"
+              ? [
+                  { value: "monitorAndOutput", label: "Monitor and output" },
+                  { value: "monitorOnly", label: "Monitor only" }
+                ]
+              : ["toggle", "play", "pause", "stop", "restart", "next", "previous"].map((option) => ({
+                  value: option,
+                  label: option
+                }));
+    const choices = options.map((option) => (typeof option === "string" ? { value: option, label: option } : option));
     return (
       <div type="select" className="sdpi-item">
-        <div className="sdpi-item-label">{label(field)}</div>
+        <div className="sdpi-item-label">{label(field, kind)}</div>
         <select className="sdpi-item-value select" value={String(value)} onChange={(event) => onChange({ ...params, [field]: event.target.value })}>
-          {options.map((option) => (
-            <option key={option} value={option}>
-              {option}
+          {choices.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
       </div>
     );
   }
-  const numeric = field === "stepDb";
+  const numeric = field === "stepDb" || field === "dialStep" || field === "monitorIndex" || field === "transitionDurationMs";
   const wide = field === "requestData" || field === "batchRequests";
+  const catalogField =
+    field === "sceneName" ||
+    field === "sourceName" ||
+    field === "inputName" ||
+    field === "filterName" ||
+    field === "collectionName" ||
+    field === "profileName" ||
+    field === "hotkeyName" ||
+    field === "transitionName" ||
+    field === "outputName";
+  if (catalogField && suggestions.length > 0) {
+    const current = String(value);
+    const options = suggestions.includes(current) || current === "" ? suggestions : [current, ...suggestions];
+    return (
+      <div type="select" className="sdpi-item">
+        <div className="sdpi-item-label">{label(field, kind)}</div>
+        <select
+          className="sdpi-item-value select"
+          value={current}
+          onChange={(event) => onChange({ ...params, [field]: event.target.value })}
+        >
+          <option value="">{current ? "—" : "Select…"}</option>
+          {options.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
   return (
     <div className="sdpi-item">
-      <div className="sdpi-item-label">{label(field)}</div>
+      <div className="sdpi-item-label">{label(field, kind)}</div>
       {wide ? (
         <textarea
           className="sdpi-item-value"
@@ -592,7 +690,12 @@ function statusColor(kind: string | undefined, fallback: string) {
   }
 }
 
-function label(field: keyof ActionParams) {
+function label(field: keyof ActionParams, kind = "") {
+  if (field === "dialStep") {
+    if (kind === "tbar" || kind === "balance") return "Step (%)";
+    if (kind === "mediajog") return "Step (s)";
+    return "Step (ms)";
+  }
   const names: Partial<Record<keyof ActionParams, string>> = {
     sceneName: "Scene",
     sourceName: "Source",
@@ -609,7 +712,13 @@ function label(field: keyof ActionParams) {
     requestType: "Request",
     requestData: "Data",
     batchRequests: "Batch",
-    haltOnFailure: "Halt"
+    haltOnFailure: "Halt",
+    transitionName: "Transition",
+    transitionDurationMs: "Duration (ms)",
+    projectorType: "Type",
+    monitorIndex: "Monitor",
+    outputName: "Output",
+    monitorType: "Monitor"
   };
   return names[field] ?? field;
 }
