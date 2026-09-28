@@ -321,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "multiobs-plugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "obs-pool"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "futures-util",

@@ -7,8 +7,8 @@ use obs_websocket_core::requests::{
     SaveSourceScreenshot, SetCurrentPreviewScene, SetCurrentProfile, SetCurrentProgramScene,
     SetCurrentSceneCollection, SetCurrentSceneTransition, SetCurrentSceneTransitionDuration,
     SetInputAudioBalance, SetInputAudioMonitorType, SetInputAudioSyncOffset, SetInputMute,
-    SetInputVolume, SetSceneItemEnabled, SetSourceFilterEnabled, SetStudioModeEnabled,
-    StopOutput, ToggleInputMute, ToggleOutput, TriggerHotkeyByKeySequence, TriggerHotkeyByName,
+    SetInputVolume, SetSceneItemEnabled, SetSourceFilterEnabled, SetStudioModeEnabled, StopOutput,
+    ToggleInputMute, ToggleOutput, TriggerHotkeyByKeySequence, TriggerHotkeyByName,
     TriggerMediaInputAction,
 };
 use obs_websocket_core::types::KeyModifiers;
@@ -335,7 +335,10 @@ pub fn event_affects(kind: ActionKind, scene_output: SceneOutput, event: &Event)
         }
         Event::InputVolumeChanged(_) => kind == ActionKind::Volume,
         Event::CurrentSceneTransitionChanged(_) => {
-            matches!(kind, ActionKind::Transition | ActionKind::TransitionDuration)
+            matches!(
+                kind,
+                ActionKind::Transition | ActionKind::TransitionDuration
+            )
         }
         Event::CurrentSceneTransitionDurationChanged(_) => kind == ActionKind::TransitionDuration,
         Event::SceneTransitionEnded(_) => kind == ActionKind::Tbar,
@@ -1088,7 +1091,11 @@ async fn rotate_tbar(
     }
     let current = match stored {
         Some(position) => position,
-        None => match client.transitions().get_current_scene_transition_cursor().await {
+        None => match client
+            .transitions()
+            .get_current_scene_transition_cursor()
+            .await
+        {
             Ok(cursor) if cursor.transition_cursor < 1.0 => cursor.transition_cursor,
             _ => 0.0,
         },
@@ -1185,9 +1192,7 @@ async fn rotate_sync_offset(
 ) -> ObsResult<RotateOutcome> {
     let current = client
         .inputs()
-        .get_input_audio_sync_offset(
-            &GetInputAudioSyncOffset::new().input_name(&params.input_name),
-        )
+        .get_input_audio_sync_offset(&GetInputAudioSyncOffset::new().input_name(&params.input_name))
         .await
         .map_err(text)?
         .input_audio_sync_offset;
@@ -1212,10 +1217,7 @@ async fn transition_duration_title(client: &Client) -> ObsResult<String> {
         .get_current_scene_transition()
         .await
         .map_err(text)?;
-    Ok(format!(
-        "{} ms",
-        current.transition_duration.unwrap_or(0)
-    ))
+    Ok(format!("{} ms", current.transition_duration.unwrap_or(0)))
 }
 
 async fn media_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
@@ -1243,9 +1245,7 @@ async fn balance_title(client: &Client, params: &ActionParams) -> ObsResult<Stri
 async fn sync_offset_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
     let current = client
         .inputs()
-        .get_input_audio_sync_offset(
-            &GetInputAudioSyncOffset::new().input_name(&params.input_name),
-        )
+        .get_input_audio_sync_offset(&GetInputAudioSyncOffset::new().input_name(&params.input_name))
         .await
         .map_err(text)?;
     Ok(format_sync_offset(current.input_audio_sync_offset))
@@ -1424,18 +1424,25 @@ mod tests {
         })
     }
 
-    fn request_data<'a>(requests: &'a [serde_json::Value], request_type: &str) -> Option<&'a serde_json::Value> {
+    fn request_data<'a>(
+        requests: &'a [serde_json::Value],
+        request_type: &str,
+    ) -> Option<&'a serde_json::Value> {
         requests.iter().rev().find_map(|request| {
-            (request.pointer("/d/requestType").and_then(|value| value.as_str()) == Some(request_type))
-                .then(|| request.pointer("/d/requestData"))
-                .flatten()
+            (request
+                .pointer("/d/requestType")
+                .and_then(|value| value.as_str())
+                == Some(request_type))
+            .then(|| request.pointer("/d/requestData"))
+            .flatten()
         })
     }
 
     async fn connect_one() -> (MockObs, ObsPool, String) {
         let server = MockObs::spawn(None).await;
         let pool = ObsPool::new(PoolOptions::for_tests());
-        pool.reconcile(vec![instance("a", server.port)], vec![]).await;
+        pool.reconcile(vec![instance("a", server.port)], vec![])
+            .await;
         tokio::time::timeout(std::time::Duration::from_secs(8), async {
             loop {
                 if pool.client("a").await.is_ok() {
@@ -1493,18 +1500,30 @@ mod tests {
     async fn tbar_holds_then_releases_at_full() {
         let (server, pool, id) = connect_one().await;
         let client = pool.client(&id).await.unwrap();
-        let first = rotate(ActionKind::Tbar, &client, &ActionParams::default(), 1, Some(0.0))
-            .await
-            .unwrap();
+        let first = rotate(
+            ActionKind::Tbar,
+            &client,
+            &ActionParams::default(),
+            1,
+            Some(0.0),
+        )
+        .await
+        .unwrap();
         assert_eq!(first.tbar_position, Some(0.05));
         let requests = server.requests().await;
         let data = request_data(&requests, "SetTBarPosition").unwrap();
         assert_eq!(data["release"], false);
         assert!((data["position"].as_f64().unwrap() - 0.05).abs() < 0.001);
 
-        let last = rotate(ActionKind::Tbar, &client, &ActionParams::default(), 1, Some(0.95))
-            .await
-            .unwrap();
+        let last = rotate(
+            ActionKind::Tbar,
+            &client,
+            &ActionParams::default(),
+            1,
+            Some(0.95),
+        )
+        .await
+        .unwrap();
         assert_eq!(last.tbar_position, Some(0.0));
         let requests = server.requests().await;
         let data = request_data(&requests, "SetTBarPosition").unwrap();
