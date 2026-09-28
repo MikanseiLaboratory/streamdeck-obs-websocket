@@ -25,9 +25,14 @@ struct LiveKey {
     settings: ActionSettings,
     segments: HashMap<String, SegmentState>,
     titles: HashMap<String, String>,
+    indicators: HashMap<String, u8>,
     tbar_positions: HashMap<String, f64>,
     title: String,
     multi: bool,
+}
+
+struct OpenInspector {
+    resource: Option<String>,
 }
 
 struct Runtime {
@@ -38,6 +43,9 @@ struct Runtime {
     dirty: Mutex<HashSet<String>>,
     dirty_notify: Notify,
     switching: Mutex<HashSet<String>>,
+    inspectors: Mutex<HashMap<String, OpenInspector>>,
+    catalog_dirty: Mutex<HashSet<String>>,
+    catalog_notify: Notify,
 }
 
 #[derive(Clone)]
@@ -64,6 +72,9 @@ impl AppState {
                 dirty: Mutex::new(HashSet::new()),
                 dirty_notify: Notify::new(),
                 switching: Mutex::new(HashSet::new()),
+                inspectors: Mutex::new(HashMap::new()),
+                catalog_dirty: Mutex::new(HashSet::new()),
+                catalog_notify: Notify::new(),
             }),
         };
         state.spawn_workers();
@@ -109,6 +120,8 @@ impl AppState {
         *self.runtime.global.lock().await = settings;
         self.mark_all_dirty().await;
         self.push_status_to_open_inspectors().await;
+        self.schedule_catalog_refresh(ops::CatalogRefresh::All)
+            .await;
     }
 
     pub async fn upsert_key(
@@ -130,6 +143,7 @@ impl AppState {
                 settings,
                 segments,
                 titles: HashMap::new(),
+                indicators: HashMap::new(),
                 tbar_positions,
                 title: String::new(),
                 multi,
@@ -145,9 +159,20 @@ impl AppState {
 
     pub async fn remove_key(&self, context: &str) {
         self.runtime.keys.lock().await.remove(context);
+        self.runtime.inspectors.lock().await.remove(context);
+        self.runtime.catalog_dirty.lock().await.remove(context);
         if let Some(press) = self.runtime.presses.lock().await.remove(context) {
             press.token.cancel();
         }
+    }
+
+    pub async fn inspector_appeared(&self, context: &str) {
+        self.remember_inspector(context, None).await;
+    }
+
+    pub async fn inspector_disappeared(&self, context: &str) {
+        self.runtime.inspectors.lock().await.remove(context);
+        self.runtime.catalog_dirty.lock().await.remove(context);
     }
 
     pub fn begin_press(&self, context: &str) {
@@ -257,7 +282,13 @@ impl AppState {
     async fn dispatch_inspector(&self, context: &str, payload: Value) {
         let message_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
         match message_type {
-            "ready" => self.push_status(context).await,
+            "ready" => {
+                self.remember_inspector(context, None).await;
+                self.push_status(context).await;
+                if let Some(resource) = self.inspector_resource(context).await {
+                    self.push_catalog(context, &resource).await;
+                }
+            }
             "reconnect" => {
                 if let Some(id) = payload.get("id").and_then(Value::as_str) {
                     self.pool.reconnect(id).await;
@@ -268,6 +299,8 @@ impl AppState {
                     .get("resource")
                     .and_then(Value::as_str)
                     .unwrap_or("");
+                self.remember_inspector(context, Some(resource.to_string()))
+                    .await;
                 self.push_catalog(context, resource).await;
             }
             _ => {}
@@ -333,6 +366,7 @@ impl AppState {
         };
         let targets = self.targets_for(&snapshot.settings).await;
         let mut titles = HashMap::new();
+        let mut indicators = HashMap::new();
         let mut tbar_positions = HashMap::new();
         for id in &targets {
             let params = snapshot.settings.params_for(id).clone();
@@ -343,6 +377,7 @@ impl AppState {
             match ops::rotate(snapshot.kind, &client, &params, ticks, stored).await {
                 Ok(outcome) => {
                     titles.insert(id.clone(), outcome.title);
+                    indicators.insert(id.clone(), outcome.indicator);
                     if let Some(position) = outcome.tbar_position {
                         tbar_positions.insert(id.clone(), position);
                     }
@@ -352,6 +387,7 @@ impl AppState {
         }
         if let Some(key) = self.runtime.keys.lock().await.get_mut(context) {
             key.titles = titles.clone();
+            key.indicators = indicators;
             for (id, position) in tbar_positions {
                 key.tbar_positions.insert(id, position);
             }
@@ -373,6 +409,7 @@ impl AppState {
         let switching = self.runtime.switching.lock().await.clone();
         let mut segments = HashMap::new();
         let mut titles = HashMap::new();
+        let mut indicators = HashMap::new();
         for id in &targets {
             if switching.contains(id) {
                 segments.insert(
@@ -385,6 +422,9 @@ impl AppState {
                 );
                 if let Some(title) = snapshot.titles.get(id) {
                     titles.insert(id.clone(), title.clone());
+                }
+                if let Some(indicator) = snapshot.indicators.get(id) {
+                    indicators.insert(id.clone(), *indicator);
                 }
                 continue;
             }
@@ -418,8 +458,11 @@ impl AppState {
                 }
             }
             let stored = snapshot.tbar_positions.get(id).copied();
-            if let Ok(Some(line)) = ops::live_title(snapshot.kind, &client, params, stored).await {
-                titles.insert(id.clone(), line);
+            if let Ok(Some(label)) = ops::live_title(snapshot.kind, &client, params, stored).await {
+                titles.insert(id.clone(), label.text);
+                if let Some(indicator) = label.indicator {
+                    indicators.insert(id.clone(), indicator);
+                }
             } else if let Some(title) = title_for(snapshot.kind, params) {
                 titles.insert(id.clone(), title);
             }
@@ -428,6 +471,7 @@ impl AppState {
             key.segments = segments;
             key.title = join_titles(&targets, &titles);
             key.titles = titles;
+            key.indicators = indicators;
         }
         self.mark_dirty(context).await;
     }
@@ -450,6 +494,7 @@ impl AppState {
             .is_some_and(|status| status.is_connected());
         let mut state = SegmentState::Unavailable;
         let mut title = None;
+        let mut indicator = None;
         if connected {
             if let Ok(client) = self.pool.client(instance_id).await {
                 let params = snapshot.settings.params_for(instance_id);
@@ -462,16 +507,22 @@ impl AppState {
                 .await
                 .unwrap_or(SegmentState::Unavailable);
                 let stored = snapshot.tbar_positions.get(instance_id).copied();
-                title = match ops::live_title(snapshot.kind, &client, params, stored).await {
-                    Ok(Some(line)) => Some(line),
-                    _ => title_for(snapshot.kind, params),
-                };
+                match ops::live_title(snapshot.kind, &client, params, stored).await {
+                    Ok(Some(label)) => {
+                        title = Some(label.text);
+                        indicator = label.indicator;
+                    }
+                    _ => title = title_for(snapshot.kind, params),
+                }
             }
         }
         if let Some(key) = self.runtime.keys.lock().await.get_mut(context) {
             key.segments.insert(instance_id.to_string(), state);
             if let Some(title) = title {
                 key.titles.insert(instance_id.to_string(), title);
+            }
+            if let Some(indicator) = indicator {
+                key.indicators.insert(instance_id.to_string(), indicator);
             }
             key.title = join_titles(&targets, &key.titles);
         }
@@ -507,6 +558,10 @@ impl AppState {
                     }
                 }
                 self.push_status_to_open_inspectors().await;
+                if status.status.is_connected() {
+                    self.schedule_catalog_refresh(ops::CatalogRefresh::All)
+                        .await;
+                }
             }
             PoolEvent::Obs { id, event } => {
                 if matches!(
@@ -546,6 +601,8 @@ impl AppState {
                 for context in contexts {
                     self.refresh_instance(&context, &id).await;
                 }
+                self.schedule_catalog_refresh(ops::catalog_refresh_for(&event))
+                    .await;
             }
         }
     }
@@ -554,7 +611,7 @@ impl AppState {
         let Some(sender) = self.runtime.sender.lock().await.clone() else {
             return;
         };
-        let (kind, settings, segments, title, multi) = {
+        let (kind, settings, segments, title, indicators, multi) = {
             let keys = self.runtime.keys.lock().await;
             let Some(key) = keys.get(context) else {
                 return;
@@ -564,6 +621,7 @@ impl AppState {
                 key.settings.clone(),
                 key.segments.clone(),
                 key.title.clone(),
+                key.indicators.clone(),
                 key.multi,
             )
         };
@@ -595,7 +653,24 @@ impl AppState {
         {
             return;
         }
-        if !multi && !title.is_empty() {
+        if kind.is_dial() {
+            let heading = dial_heading(kind, &settings, &targets);
+            let indicator = dial_indicator(&targets, &indicators);
+            let value = if title.is_empty() {
+                "—".into()
+            } else {
+                title
+            };
+            let _ = sender.set_feedback(
+                context,
+                &json!({
+                    "title": heading,
+                    "value": value,
+                    "indicator": indicator,
+                    "icon": image,
+                }),
+            );
+        } else if !multi && !title.is_empty() {
             let _ = sender.set_title(context, Some(&title), Target::HardwareAndSoftware, None);
         }
         if kind.has_toggle_state() {
@@ -619,10 +694,69 @@ impl AppState {
     }
 
     async fn push_status_to_open_inspectors(&self) {
-        let contexts: Vec<String> = self.runtime.keys.lock().await.keys().cloned().collect();
+        let contexts: Vec<String> = self
+            .runtime
+            .inspectors
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect();
         for context in contexts {
             self.push_status(&context).await;
         }
+    }
+
+    async fn remember_inspector(&self, context: &str, resource: Option<String>) {
+        let resource = match resource.filter(|value| !value.is_empty()) {
+            Some(value) => Some(value),
+            None => self
+                .key_snapshot(context)
+                .await
+                .and_then(|key| key.kind.catalog_resource().map(str::to_string)),
+        };
+        let mut inspectors = self.runtime.inspectors.lock().await;
+        if let Some(inspector) = inspectors.get_mut(context) {
+            if resource.is_some() {
+                inspector.resource = resource;
+            }
+        } else {
+            inspectors.insert(context.to_string(), OpenInspector { resource });
+        }
+    }
+
+    async fn inspector_resource(&self, context: &str) -> Option<String> {
+        self.runtime
+            .inspectors
+            .lock()
+            .await
+            .get(context)
+            .and_then(|inspector| inspector.resource.clone())
+    }
+
+    async fn schedule_catalog_refresh(&self, refresh: ops::CatalogRefresh) {
+        if matches!(refresh, ops::CatalogRefresh::None) {
+            return;
+        }
+        let contexts: Vec<String> = {
+            let inspectors = self.runtime.inspectors.lock().await;
+            inspectors
+                .iter()
+                .filter(|(_, inspector)| match refresh {
+                    ops::CatalogRefresh::All => inspector.resource.is_some(),
+                    ops::CatalogRefresh::Resource(name) => {
+                        inspector.resource.as_deref() == Some(name)
+                    }
+                    ops::CatalogRefresh::None => false,
+                })
+                .map(|(context, _)| context.clone())
+                .collect()
+        };
+        if contexts.is_empty() {
+            return;
+        }
+        self.runtime.catalog_dirty.lock().await.extend(contexts);
+        self.runtime.catalog_notify.notify_waiters();
     }
 
     async fn push_status(&self, context: &str) {
@@ -701,6 +835,7 @@ impl AppState {
             settings: key.settings.clone(),
             segments: key.segments.clone(),
             titles: key.titles.clone(),
+            indicators: key.indicators.clone(),
             tbar_positions: key.tbar_positions.clone(),
             title: key.title.clone(),
             multi: key.multi,
@@ -744,6 +879,26 @@ impl AppState {
             }
         });
 
+        let catalogs = self.clone();
+        tokio::spawn(async move {
+            loop {
+                catalogs.runtime.catalog_notify.notified().await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let contexts: Vec<String> = catalogs
+                    .runtime
+                    .catalog_dirty
+                    .lock()
+                    .await
+                    .drain()
+                    .collect();
+                for context in contexts {
+                    if let Some(resource) = catalogs.inspector_resource(&context).await {
+                        catalogs.push_catalog(&context, &resource).await;
+                    }
+                }
+            }
+        });
+
         let stats = self.clone();
         tokio::spawn(async move {
             loop {
@@ -769,9 +924,13 @@ fn title_for(kind: ActionKind, params: &crate::contracts::ActionParams) -> Optio
     let text = match kind {
         ActionKind::Scene => params.scene_name.clone(),
         ActionKind::Source | ActionKind::Projector => params.source_name.clone(),
-        ActionKind::Mute | ActionKind::Volume | ActionKind::Media | ActionKind::Monitor => {
-            params.input_name.clone()
-        }
+        ActionKind::Mute
+        | ActionKind::Volume
+        | ActionKind::Media
+        | ActionKind::MediaJog
+        | ActionKind::Balance
+        | ActionKind::SyncOffset
+        | ActionKind::Monitor => params.input_name.clone(),
         ActionKind::Filter => params.filter_name.clone(),
         ActionKind::Collection => params.collection_name.clone(),
         ActionKind::Profile => params.profile_name.clone(),
@@ -793,6 +952,32 @@ fn join_titles(targets: &[String], titles: &HashMap<String, String>) -> String {
         .filter_map(|id| titles.get(id).cloned())
         .collect();
     unique_join(&ordered)
+}
+
+fn dial_heading(kind: ActionKind, settings: &ActionSettings, targets: &[String]) -> String {
+    let names: Vec<String> = targets
+        .iter()
+        .filter_map(|id| title_for(kind, settings.params_for(id)))
+        .collect();
+    let joined = unique_join(&names);
+    if joined.is_empty() {
+        kind.dial_heading().to_string()
+    } else {
+        joined.replace('\n', " · ")
+    }
+}
+
+fn dial_indicator(targets: &[String], indicators: &HashMap<String, u8>) -> u8 {
+    let values: Vec<u8> = targets
+        .iter()
+        .filter_map(|id| indicators.get(id).copied())
+        .collect();
+    if values.is_empty() {
+        0
+    } else {
+        let sum: u32 = values.iter().map(|value| u32::from(*value)).sum();
+        (sum / values.len() as u32) as u8
+    }
 }
 
 fn unique_join(lines: &[String]) -> String {
@@ -825,6 +1010,7 @@ impl Clone for LiveKey {
             settings: self.settings.clone(),
             segments: self.segments.clone(),
             titles: self.titles.clone(),
+            indicators: self.indicators.clone(),
             tbar_positions: self.tbar_positions.clone(),
             title: self.title.clone(),
             multi: self.multi,
@@ -845,6 +1031,10 @@ impl AppState {
 
     pub async fn is_switching(&self, id: &str) -> bool {
         self.runtime.switching.lock().await.contains(id)
+    }
+
+    pub async fn open_inspector_resource(&self, context: &str) -> Option<String> {
+        self.inspector_resource(context).await
     }
 }
 
@@ -1069,5 +1259,31 @@ mod tests {
         );
         wait_segment(&state, "scene", "a", SegmentState::Unavailable).await;
         assert!(!state.is_switching("a").await);
+    }
+
+    #[tokio::test]
+    async fn ready_keeps_the_open_inspector_catalog() {
+        let state = AppState::new(PoolOptions::for_tests());
+        state
+            .upsert_key(
+                "scene",
+                ActionKind::Scene,
+                scene_key("Live", SceneOutput::Program),
+                false,
+            )
+            .await;
+        state.handle_inspector("scene", json!({ "type": "ready" }));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if state.open_inspector_resource("scene").await.as_deref() == Some("scenes") {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("inspector stayed open with its catalog");
+        state.inspector_disappeared("scene").await;
+        assert_eq!(state.open_inspector_resource("scene").await, None);
     }
 }

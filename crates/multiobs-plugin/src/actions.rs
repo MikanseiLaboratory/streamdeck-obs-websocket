@@ -60,6 +60,26 @@ macro_rules! obs_key {
                 Ok(())
             }
 
+            async fn on_property_inspector_did_appear(
+                &mut self,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state()
+                    .inspector_appeared(&ctx.identity().context)
+                    .await;
+                Ok(())
+            }
+
+            async fn on_property_inspector_did_disappear(
+                &mut self,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state()
+                    .inspector_disappeared(&ctx.identity().context)
+                    .await;
+                Ok(())
+            }
+
             async fn on_property_inspector_message(
                 &mut self,
                 payload: &Value,
@@ -131,6 +151,26 @@ macro_rules! obs_dial {
                 ctx: &ActionContext<'_, Self::Settings, Self::State>,
             ) -> Result<()> {
                 ctx.state().dial_down(&ctx.identity().context);
+                Ok(())
+            }
+
+            async fn on_property_inspector_did_appear(
+                &mut self,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state()
+                    .inspector_appeared(&ctx.identity().context)
+                    .await;
+                Ok(())
+            }
+
+            async fn on_property_inspector_did_disappear(
+                &mut self,
+                ctx: &ActionContext<'_, Self::Settings, Self::State>,
+            ) -> Result<()> {
+                ctx.state()
+                    .inspector_disappeared(&ctx.identity().context)
+                    .await;
                 Ok(())
             }
 

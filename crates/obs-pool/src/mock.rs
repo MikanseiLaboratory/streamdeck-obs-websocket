@@ -338,6 +338,7 @@ async fn response_data(
                 "mediaCursor": 83000
             }),
         ),
+        "GetInputVolume" => (true, json!({"inputVolumeMul": 1.0, "inputVolumeDb": 0.0})),
         "GetInputAudioBalance" => (true, json!({"inputAudioBalance": 0.5})),
         "GetInputAudioSyncOffset" => (true, json!({"inputAudioSyncOffset": 0})),
         "GetInputAudioMonitorType" => (true, json!({"monitorType": "OBS_MONITORING_TYPE_NONE"})),

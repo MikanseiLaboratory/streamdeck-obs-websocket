@@ -32,7 +32,14 @@ type ObsResult<T> = Result<T, String>;
 
 pub struct RotateOutcome {
     pub title: String,
+    pub indicator: u8,
     pub tbar_position: Option<f64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LiveLabel {
+    pub text: String,
+    pub indicator: Option<u8>,
 }
 
 pub async fn execute(
@@ -349,6 +356,33 @@ pub fn event_affects(kind: ActionKind, scene_output: SceneOutput, event: &Event)
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CatalogRefresh {
+    None,
+    Resource(&'static str),
+    All,
+}
+
+pub fn catalog_refresh_for(event: &Event) -> CatalogRefresh {
+    match event {
+        Event::SceneCreated(_)
+        | Event::SceneRemoved(_)
+        | Event::SceneNameChanged(_)
+        | Event::SceneListChanged(_) => CatalogRefresh::Resource("scenes"),
+        Event::InputCreated(_) | Event::InputRemoved(_) | Event::InputNameChanged(_) => {
+            CatalogRefresh::Resource("inputs")
+        }
+        Event::SourceFilterCreated(_)
+        | Event::SourceFilterRemoved(_)
+        | Event::SourceFilterNameChanged(_)
+        | Event::SourceFilterListReindexed(_) => CatalogRefresh::Resource("filters"),
+        Event::SceneCollectionListChanged(_) => CatalogRefresh::Resource("collections"),
+        Event::ProfileListChanged(_) => CatalogRefresh::Resource("profiles"),
+        Event::CurrentSceneCollectionChanged(_) => CatalogRefresh::All,
+        _ => CatalogRefresh::None,
+    }
+}
+
 fn follows_preview(scene_output: SceneOutput) -> bool {
     matches!(scene_output, SceneOutput::Preview | SceneOutput::Both)
 }
@@ -365,12 +399,17 @@ pub async fn stat_line(client: &Client, params: &ActionParams) -> ObsResult<Stri
 }
 
 pub async fn volume_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
-    let current = client
+    let db = current_volume_db(client, params).await?;
+    Ok(format!("{db:.1} dB"))
+}
+
+async fn current_volume_db(client: &Client, params: &ActionParams) -> ObsResult<f64> {
+    Ok(client
         .inputs()
         .get_input_volume(&GetInputVolume::new().input_name(&params.input_name))
         .await
-        .map_err(text)?;
-    Ok(format!("{:.1} dB", current.input_volume_db))
+        .map_err(text)?
+        .input_volume_db)
 }
 
 pub async fn adjust_volume(
@@ -406,15 +445,48 @@ pub async fn live_title(
     client: &Client,
     params: &ActionParams,
     tbar_position: Option<f64>,
-) -> ObsResult<Option<String>> {
+) -> ObsResult<Option<LiveLabel>> {
     match kind {
-        ActionKind::Stats => Ok(Some(stat_line(client, params).await?)),
-        ActionKind::Volume => Ok(Some(volume_title(client, params).await?)),
-        ActionKind::Tbar => Ok(Some(tbar_title(tbar_position.unwrap_or(0.0)))),
-        ActionKind::TransitionDuration => Ok(Some(transition_duration_title(client).await?)),
-        ActionKind::MediaJog => Ok(Some(media_title(client, params).await?)),
-        ActionKind::Balance => Ok(Some(balance_title(client, params).await?)),
-        ActionKind::SyncOffset => Ok(Some(sync_offset_title(client, params).await?)),
+        ActionKind::Stats => Ok(Some(LiveLabel {
+            text: stat_line(client, params).await?,
+            indicator: None,
+        })),
+        ActionKind::Volume => {
+            let db = current_volume_db(client, params).await?;
+            Ok(Some(LiveLabel {
+                text: format!("{db:.1} dB"),
+                indicator: Some(volume_indicator(db)),
+            }))
+        }
+        ActionKind::Tbar => {
+            let position = tbar_position.unwrap_or(0.0);
+            Ok(Some(LiveLabel {
+                text: tbar_title(position),
+                indicator: Some(tbar_indicator(position)),
+            }))
+        }
+        ActionKind::TransitionDuration => {
+            let ms = current_transition_ms(client).await?;
+            Ok(Some(LiveLabel {
+                text: format!("{ms} ms"),
+                indicator: Some(duration_indicator(ms)),
+            }))
+        }
+        ActionKind::MediaJog => Ok(Some(media_label(client, params).await?)),
+        ActionKind::Balance => {
+            let value = current_balance(client, params).await?;
+            Ok(Some(LiveLabel {
+                text: format_balance(value),
+                indicator: Some(balance_indicator(value)),
+            }))
+        }
+        ActionKind::SyncOffset => {
+            let ms = current_sync_offset(client, params).await?;
+            Ok(Some(LiveLabel {
+                text: format_sync_offset(ms),
+                indicator: Some(sync_indicator(ms)),
+            }))
+        }
         _ => Ok(None),
     }
 }
@@ -427,10 +499,15 @@ pub async fn rotate(
     tbar_position: Option<f64>,
 ) -> ObsResult<RotateOutcome> {
     match kind {
-        ActionKind::Volume => Ok(RotateOutcome {
-            title: adjust_volume(client, params, ticks).await?,
-            tbar_position: None,
-        }),
+        ActionKind::Volume => {
+            let title = adjust_volume(client, params, ticks).await?;
+            let db = current_volume_db(client, params).await?;
+            Ok(RotateOutcome {
+                title,
+                indicator: volume_indicator(db),
+                tbar_position: None,
+            })
+        }
         ActionKind::Tbar => rotate_tbar(client, params, ticks, tbar_position).await,
         ActionKind::TransitionDuration => rotate_duration(client, params, ticks).await,
         ActionKind::MediaJog => rotate_media(client, params, ticks).await,
@@ -1114,6 +1191,7 @@ async fn rotate_tbar(
     let stored = if release { 0.0 } else { next };
     Ok(RotateOutcome {
         title: tbar_title(stored),
+        indicator: tbar_indicator(stored),
         tbar_position: Some(stored),
     })
 }
@@ -1138,6 +1216,7 @@ async fn rotate_duration(
         .map_err(text)?;
     Ok(RotateOutcome {
         title: format!("{next} ms"),
+        indicator: duration_indicator(next),
         tbar_position: None,
     })
 }
@@ -1155,8 +1234,10 @@ async fn rotate_media(
         )
         .await
         .map_err(text)?;
+    let label = media_label(client, params).await?;
     Ok(RotateOutcome {
-        title: media_title(client, params).await?,
+        title: label.text,
+        indicator: label.indicator.unwrap_or(0),
         tbar_position: None,
     })
 }
@@ -1181,6 +1262,7 @@ async fn rotate_balance(
         .map_err(text)?;
     Ok(RotateOutcome {
         title: format_balance(next),
+        indicator: balance_indicator(next),
         tbar_position: None,
     })
 }
@@ -1207,52 +1289,100 @@ async fn rotate_sync_offset(
         .map_err(text)?;
     Ok(RotateOutcome {
         title: format_sync_offset(next),
+        indicator: sync_indicator(next),
         tbar_position: None,
     })
 }
 
-async fn transition_duration_title(client: &Client) -> ObsResult<String> {
-    let current = client
+async fn current_transition_ms(client: &Client) -> ObsResult<i64> {
+    Ok(client
         .transitions()
         .get_current_scene_transition()
         .await
-        .map_err(text)?;
-    Ok(format!("{} ms", current.transition_duration.unwrap_or(0)))
+        .map_err(text)?
+        .transition_duration
+        .unwrap_or(300))
 }
 
-async fn media_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
+async fn media_label(client: &Client, params: &ActionParams) -> ObsResult<LiveLabel> {
     let status = client
         .media_inputs()
         .get_media_input_status(&GetMediaInputStatus::new().input_name(&params.input_name))
         .await
         .map_err(text)?;
-    Ok(format!(
-        "{} / {}",
-        format_timecode(status.media_cursor.unwrap_or(0)),
-        format_timecode(status.media_duration.unwrap_or(0))
-    ))
+    let cursor = status.media_cursor.unwrap_or(0);
+    let duration = status.media_duration.unwrap_or(0);
+    Ok(LiveLabel {
+        text: format!(
+            "{} / {}",
+            format_timecode(cursor),
+            format_timecode(duration)
+        ),
+        indicator: Some(media_indicator(cursor, duration)),
+    })
 }
 
-async fn balance_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
-    let current = client
+async fn media_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
+    Ok(media_label(client, params).await?.text)
+}
+
+async fn current_balance(client: &Client, params: &ActionParams) -> ObsResult<f64> {
+    Ok(client
         .inputs()
         .get_input_audio_balance(&GetInputAudioBalance::new().input_name(&params.input_name))
         .await
-        .map_err(text)?;
-    Ok(format_balance(current.input_audio_balance))
+        .map_err(text)?
+        .input_audio_balance)
 }
 
-async fn sync_offset_title(client: &Client, params: &ActionParams) -> ObsResult<String> {
-    let current = client
+async fn current_sync_offset(client: &Client, params: &ActionParams) -> ObsResult<i64> {
+    Ok(client
         .inputs()
         .get_input_audio_sync_offset(&GetInputAudioSyncOffset::new().input_name(&params.input_name))
         .await
-        .map_err(text)?;
-    Ok(format_sync_offset(current.input_audio_sync_offset))
+        .map_err(text)?
+        .input_audio_sync_offset)
 }
 
 fn tbar_title(position: f64) -> String {
-    format!("T {:.0}%", position * 100.0)
+    format!("{:.0}%", position * 100.0)
+}
+
+fn volume_indicator(db: f64) -> u8 {
+    scale_indicator(db, -96.0, 26.0)
+}
+
+fn tbar_indicator(position: f64) -> u8 {
+    scale_indicator(position * 100.0, 0.0, 100.0)
+}
+
+fn duration_indicator(ms: i64) -> u8 {
+    scale_indicator(ms as f64, 50.0, 20_000.0)
+}
+
+fn media_indicator(cursor: i64, duration: i64) -> u8 {
+    if duration <= 0 {
+        0
+    } else {
+        scale_indicator(cursor as f64, 0.0, duration as f64)
+    }
+}
+
+fn balance_indicator(value: f64) -> u8 {
+    scale_indicator(value * 100.0, 0.0, 100.0)
+}
+
+fn sync_indicator(ms: i64) -> u8 {
+    scale_indicator(ms as f64, -950.0, 20_000.0)
+}
+
+pub fn scale_indicator(value: f64, min: f64, max: f64) -> u8 {
+    if max <= min {
+        return 0;
+    }
+    (((value - min) / (max - min)) * 100.0)
+        .clamp(0.0, 100.0)
+        .round() as u8
 }
 
 fn format_balance(value: f64) -> String {
@@ -1510,6 +1640,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(first.tbar_position, Some(0.05));
+        assert_eq!(first.indicator, 5);
         let requests = server.requests().await;
         let data = request_data(&requests, "SetTBarPosition").unwrap();
         assert_eq!(data["release"], false);
@@ -1545,5 +1676,47 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.title, "50 ms");
+        assert_eq!(outcome.indicator, 0);
+    }
+
+    #[test]
+    fn maps_dial_values_onto_the_layout_bar() {
+        assert_eq!(scale_indicator(-96.0, -96.0, 26.0), 0);
+        assert_eq!(scale_indicator(26.0, -96.0, 26.0), 100);
+        assert_eq!(scale_indicator(50.0, 0.0, 100.0), 50);
+    }
+
+    #[test]
+    fn catalog_refresh_follows_obs_list_events() {
+        let scene = Event::from_parts(
+            "SceneCreated",
+            json!({"sceneName": "Cam", "sceneUuid": "u", "isGroup": false}),
+        )
+        .unwrap();
+        let input = Event::from_parts(
+            "InputRemoved",
+            json!({"inputName": "Mic", "inputUuid": "u"}),
+        )
+        .unwrap();
+        let collection = Event::from_parts(
+            "CurrentSceneCollectionChanged",
+            json!({"sceneCollectionName": "Show"}),
+        )
+        .unwrap();
+        let stream = Event::from_parts(
+            "StreamStateChanged",
+            json!({"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTED"}),
+        )
+        .unwrap();
+        assert_eq!(
+            catalog_refresh_for(&scene),
+            CatalogRefresh::Resource("scenes")
+        );
+        assert_eq!(
+            catalog_refresh_for(&input),
+            CatalogRefresh::Resource("inputs")
+        );
+        assert_eq!(catalog_refresh_for(&collection), CatalogRefresh::All);
+        assert_eq!(catalog_refresh_for(&stream), CatalogRefresh::None);
     }
 }
