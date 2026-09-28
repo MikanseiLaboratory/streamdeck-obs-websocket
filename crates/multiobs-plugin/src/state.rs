@@ -656,7 +656,6 @@ impl AppState {
             } else {
                 title.replace('\n', " · ")
             };
-            let _ = sender.set_feedback_layout(context, "$B1");
             let _ = sender.set_feedback(
                 context,
                 &json!({

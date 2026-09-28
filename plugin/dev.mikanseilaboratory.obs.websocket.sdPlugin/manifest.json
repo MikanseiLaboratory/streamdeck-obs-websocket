@@ -497,12 +497,12 @@
         "Encoder"
       ],
       "Encoder": {
-        "layout": "$B1"
-      },
-      "TriggerDescription": {
-        "Rotate": "Move the T-Bar",
-        "Push": "Trigger the studio transition",
-        "Touch": "Trigger the studio transition"
+        "layout": "$B1",
+        "TriggerDescription": {
+          "Rotate": "Move the T-Bar",
+          "Push": "Trigger the studio transition",
+          "Touch": "Trigger the studio transition"
+        }
       },
       "States": [
         {
@@ -519,12 +519,12 @@
         "Encoder"
       ],
       "Encoder": {
-        "layout": "$B1"
-      },
-      "TriggerDescription": {
-        "Rotate": "Change duration",
-        "Push": "Trigger the studio transition",
-        "Touch": "Trigger the studio transition"
+        "layout": "$B1",
+        "TriggerDescription": {
+          "Rotate": "Change duration",
+          "Push": "Trigger the studio transition",
+          "Touch": "Trigger the studio transition"
+        }
       },
       "States": [
         {
@@ -541,12 +541,12 @@
         "Encoder"
       ],
       "Encoder": {
-        "layout": "$B1"
-      },
-      "TriggerDescription": {
-        "Rotate": "Seek",
-        "Push": "Play or pause",
-        "Touch": "Play or pause"
+        "layout": "$B1",
+        "TriggerDescription": {
+          "Rotate": "Seek",
+          "Push": "Play or pause",
+          "Touch": "Play or pause"
+        }
       },
       "States": [
         {
@@ -563,12 +563,12 @@
         "Encoder"
       ],
       "Encoder": {
-        "layout": "$B1"
-      },
-      "TriggerDescription": {
-        "Rotate": "Pan left or right",
-        "Push": "Reset to center",
-        "Touch": "Reset to center"
+        "layout": "$B1",
+        "TriggerDescription": {
+          "Rotate": "Pan left or right",
+          "Push": "Reset to center",
+          "Touch": "Reset to center"
+        }
       },
       "States": [
         {
@@ -585,12 +585,12 @@
         "Encoder"
       ],
       "Encoder": {
-        "layout": "$B1"
-      },
-      "TriggerDescription": {
-        "Rotate": "Change offset",
-        "Push": "Reset to 0 ms",
-        "Touch": "Reset to 0 ms"
+        "layout": "$B1",
+        "TriggerDescription": {
+          "Rotate": "Change offset",
+          "Push": "Reset to 0 ms",
+          "Touch": "Reset to 0 ms"
+        }
       },
       "States": [
         {
